@@ -154,8 +154,7 @@ def format_command(command: list[str]) -> str:
 def item_progress_percent(job: Job) -> int | None:
     if job.to_check_remaining is None or not job.to_check_total:
         return None
-    completed = max(job.to_check_total - job.to_check_remaining, 0)
-    return min(100, max(0, round((completed / job.to_check_total) * 100)))
+    return min(100, max(0, round((job.to_check_remaining / job.to_check_total) * 100)))
 
 
 def progress_label(job: Job, item_percent: int | None = None) -> str:
@@ -721,6 +720,10 @@ def render_disk_card(disk: dict[str, Any], running: bool) -> str:
         <option value="2000" selected>2 seconds</option>
         <option value="5000">5 seconds</option>
         <option value="10000">10 seconds</option>
+        <option value="30000">30 seconds</option>
+        <option value="60000">60 seconds</option>
+        <option value="60001">1 minute</option>
+        <option value="300000">5 minutes</option>
       </select>
     </label>
     <button type="submit" {disabled}>Run rsync</button>
@@ -776,7 +779,7 @@ def progress_detail(job: Job, item_percent: int | None) -> str:
     if job.current_source_index and job.total_sources:
         parts.append(f"Source {job.current_source_index} of {job.total_sources}")
     if item_percent is not None:
-        parts.append(f"{item_percent}% of known items")
+        parts.append(f"{item_percent}% of known items left")
     elif job.current_file_percent is not None:
         parts.append(f"{job.current_file_percent}% of current file")
     return " · ".join(parts) or "Waiting for rsync"
@@ -1026,6 +1029,7 @@ async function refreshJobs() {
   const response = await fetch("/api/state", { cache: "no-store" });
   if (!response.ok) return;
   const state = await response.json();
+  const activityState = captureActivityState();
   const active = state.active_job;
   document.querySelector("#refresh-status").textContent =
     active ? `Running ${active.disk_name}` : refreshStatusText();
@@ -1045,6 +1049,42 @@ async function refreshJobs() {
       </details>
     </article>`).join("");
   document.querySelector("#jobs").innerHTML = jobs;
+  restoreActivityState(activityState);
+  syncRefreshSelectors();
+}
+
+function captureActivityState() {
+  const state = {
+    windowY: window.scrollY,
+    logs: new Map(),
+  };
+  document.querySelectorAll(".job").forEach((jobEl) => {
+    const jobId = jobEl.dataset.jobId;
+    const details = jobEl.querySelector(".log-details");
+    const log = jobEl.querySelector(".log-details pre");
+    if (jobId && details) {
+      state.logs.set(jobId, {
+        open: details.open,
+        scrollTop: log ? log.scrollTop : 0,
+        scrollLeft: log ? log.scrollLeft : 0,
+      });
+    }
+  });
+  return state;
+}
+
+function restoreActivityState(state) {
+  state.logs.forEach((logState, jobId) => {
+    const jobEl = Array.from(document.querySelectorAll(".job")).find((candidate) => candidate.dataset.jobId === jobId);
+    const details = jobEl ? jobEl.querySelector(".log-details") : null;
+    const log = jobEl ? jobEl.querySelector(".log-details pre") : null;
+    if (details) details.open = logState.open;
+    if (log) {
+      log.scrollTop = logState.scrollTop;
+      log.scrollLeft = logState.scrollLeft;
+    }
+  });
+  window.scrollTo({ top: state.windowY, left: window.scrollX, behavior: "auto" });
 }
 
 function renderProgress(job) {
@@ -1084,29 +1124,43 @@ function escapeHtml(value) {
 }
 
 let refreshTimer = null;
+let refreshIntervalValue = window.localStorage.getItem("offsite-refresh-interval") || "2000";
+if (!["1000", "2000", "5000", "10000", "30000", "60000", "60001", "300000"].includes(refreshIntervalValue)) {
+  refreshIntervalValue = "2000";
+}
 
 function scheduleRefresh() {
   if (refreshTimer) window.clearInterval(refreshTimer);
-  const selector = document.querySelector(".refresh-interval");
-  const interval = Number(selector ? selector.value : 2000);
+  const interval = refreshIntervalMs();
+  syncRefreshSelectors();
   refreshTimer = window.setInterval(refreshJobs, interval);
   document.querySelector("#refresh-status").textContent = refreshStatusText();
 }
 
 function refreshStatusText() {
-  const selector = document.querySelector(".refresh-interval");
-  const interval = Number(selector ? selector.value : 2000);
+  const interval = refreshIntervalMs();
+  if (interval >= 60000) return `Updates every ${interval / 60000} minute${interval === 60000 ? "" : "s"}`;
   return `Updates every ${interval / 1000} seconds`;
 }
 
-document.querySelectorAll(".refresh-interval").forEach((selector) => {
-  selector.addEventListener("change", () => {
-    document.querySelectorAll(".refresh-interval").forEach((other) => {
-      other.value = selector.value;
-    });
+function refreshIntervalMs() {
+  return Number(refreshIntervalValue) === 60001 ? 60000 : Number(refreshIntervalValue || 2000);
+}
+
+function syncRefreshSelectors() {
+  document.querySelectorAll(".refresh-interval").forEach((selector) => {
+    selector.value = refreshIntervalValue;
+  });
+}
+
+document.addEventListener("change", (event) => {
+  const selector = event.target.closest(".refresh-interval");
+  if (selector) {
+    refreshIntervalValue = selector.value;
+    window.localStorage.setItem("offsite-refresh-interval", refreshIntervalValue);
     scheduleRefresh();
     refreshJobs();
-  });
+  }
 });
 
 scheduleRefresh();

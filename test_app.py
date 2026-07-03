@@ -49,6 +49,10 @@ class RsyncCommandTests(unittest.TestCase):
         self.assertIn('name="dry_run"', html)
         self.assertNotIn('name="dry_run" checked', html)
         self.assertIn('class="refresh-interval"', html)
+        self.assertIn('value="30000"', html)
+        self.assertIn('value="60000"', html)
+        self.assertIn('value="60001"', html)
+        self.assertIn('value="300000"', html)
 
     def test_job_log_renders_collapsed_details(self) -> None:
         job = Job(
@@ -117,7 +121,8 @@ class RsyncCommandTests(unittest.TestCase):
         self.assertEqual(progress["xfer_count"], 3)
         self.assertEqual(progress["to_check_remaining"], 7)
         self.assertEqual(progress["to_check_total"], 20)
-        self.assertEqual(progress["item_percent"], 65)
+        self.assertEqual(progress["item_percent"], 35)
+        self.assertIn("35% of known items left", progress["detail"])
         self.assertFalse(progress["indeterminate"])
 
     def test_running_job_without_numbers_is_indeterminate(self) -> None:
