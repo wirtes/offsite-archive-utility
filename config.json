@@ -1,0 +1,43 @@
+{
+  "rsync_path": "/usr/bin/rsync",
+  "rsync_options": [
+    "-aE",
+    "--delete",
+    "--progress",
+    "--human-readable"
+  ],
+  "exclude_patterns": [
+    ".DS_Store",
+    ".Trash/",
+    "node_modules/",
+    ".git/"
+  ],
+  "sources": [
+    {
+      "id": "home-documents",
+      "label": "Documents",
+      "path": "/Users/wirtes/Documents",
+      "enabled": true
+    }
+  ],
+  "backup_disks": [
+    {
+      "id": "offsite-a",
+      "name": "Offsite Disk A",
+      "mount_path": "/Volumes/Offsite-A",
+      "destination_subdir": "Backups/This-Mac"
+    },
+    {
+      "id": "offsite-b",
+      "name": "Offsite Disk B",
+      "mount_path": "/Volumes/Offsite-B",
+      "destination_subdir": "Backups/This-Mac"
+    },
+    {
+      "id": "offsite-c",
+      "name": "Offsite Disk C",
+      "mount_path": "/Volumes/Offsite-C",
+      "destination_subdir": "Backups/This-Mac"
+    }
+  ]
+}
