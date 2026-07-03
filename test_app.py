@@ -51,8 +51,8 @@ class RsyncCommandTests(unittest.TestCase):
         self.assertIn('class="refresh-interval"', html)
         self.assertIn('value="30000"', html)
         self.assertIn('value="60000"', html)
-        self.assertIn('value="60001"', html)
-        self.assertIn('value="300000"', html)
+        self.assertNotIn('value="60001"', html)
+        self.assertNotIn('value="300000"', html)
 
     def test_job_log_renders_collapsed_details(self) -> None:
         job = Job(

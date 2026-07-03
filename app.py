@@ -722,8 +722,6 @@ def render_disk_card(disk: dict[str, Any], running: bool) -> str:
         <option value="10000">10 seconds</option>
         <option value="30000">30 seconds</option>
         <option value="60000">60 seconds</option>
-        <option value="60001">1 minute</option>
-        <option value="300000">5 minutes</option>
       </select>
     </label>
     <button type="submit" {disabled}>Run rsync</button>
@@ -1125,7 +1123,8 @@ function escapeHtml(value) {
 
 let refreshTimer = null;
 let refreshIntervalValue = window.localStorage.getItem("offsite-refresh-interval") || "2000";
-if (!["1000", "2000", "5000", "10000", "30000", "60000", "60001", "300000"].includes(refreshIntervalValue)) {
+if (refreshIntervalValue === "60001") refreshIntervalValue = "60000";
+if (!["1000", "2000", "5000", "10000", "30000", "60000"].includes(refreshIntervalValue)) {
   refreshIntervalValue = "2000";
 }
 
@@ -1144,7 +1143,7 @@ function refreshStatusText() {
 }
 
 function refreshIntervalMs() {
-  return Number(refreshIntervalValue) === 60001 ? 60000 : Number(refreshIntervalValue || 2000);
+  return Number(refreshIntervalValue || 2000);
 }
 
 function syncRefreshSelectors() {
