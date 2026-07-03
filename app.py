@@ -268,9 +268,9 @@ def validate_config(config: dict[str, Any]) -> None:
     source_ids = set()
     for source in config["sources"]:
         require_fields(source, ("id", "path"), "source")
-        validate_path_segment(source["id"], "source backup subdirectory")
+        validate_path_segment(source["id"], "source subdirectory on backup disk")
         if source["id"] in source_ids:
-            raise ValueError(f"Duplicate source backup subdirectory: {source['id']}")
+            raise ValueError(f"Duplicate source subdirectory on backup disk: {source['id']}")
         source_ids.add(source["id"])
 
     disk_ids = set()
@@ -646,7 +646,7 @@ def render_page(state: BackupState, error: str = "") -> str:
           </div>
           <div class="table-wrap">
             <table id="sources-table">
-              <thead><tr><th>Enabled</th><th>Backup subdirectory</th><th>Path</th><th></th></tr></thead>
+              <thead><tr><th>Enabled</th><th>Subdirectory on backup disk</th><th>Path</th><th></th></tr></thead>
               <tbody>{source_rows}</tbody>
             </table>
           </div>

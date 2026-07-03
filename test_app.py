@@ -13,7 +13,7 @@ class RsyncCommandTests(unittest.TestCase):
 
             html = render_page(state)
 
-            self.assertIn("Backup subdirectory", html)
+            self.assertIn("Subdirectory on backup disk", html)
             self.assertIn('placeholder="backup-subdirectory"', html)
             self.assertNotIn("<th>Label</th>", html)
             self.assertIn("ID is the stable internal key", html)
