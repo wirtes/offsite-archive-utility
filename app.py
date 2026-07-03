@@ -365,6 +365,8 @@ class BackupRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/":
             self.send_html(render_page(self.state))
+        elif parsed.path == "/favicon.svg":
+            self.send_svg(FAVICON_SVG)
         elif parsed.path == "/api/state":
             self.send_json(public_state(self.state))
         elif parsed.path.startswith("/api/jobs/"):
@@ -416,6 +418,15 @@ class BackupRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def send_svg(self, content: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+        encoded = content.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
     def send_error_json(self, message: str, status: HTTPStatus) -> None:
         self.send_json({"error": message}, status)
 
@@ -460,6 +471,7 @@ def render_page(state: BackupState, error: str = "") -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <title>Offsite Archive Utility</title>
   <style>{CSS}</style>
 </head>
@@ -696,6 +708,27 @@ pre {
   button { width: 100%; }
 }
 """
+
+
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="10" y1="6" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22313f"/>
+      <stop offset="1" stop-color="#0c171c"/>
+    </linearGradient>
+    <linearGradient id="brass" x1="18" y1="16" x2="48" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e7c06d"/>
+      <stop offset="1" stop-color="#b9872d"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <path d="M18 20.5C18 17.5 20.5 15 23.5 15h17c3 0 5.5 2.5 5.5 5.5v23c0 3-2.5 5.5-5.5 5.5h-17c-3 0-5.5-2.5-5.5-5.5v-23Z" fill="#f7f4ea"/>
+  <path d="M22 22c0-1.7 1.3-3 3-3h14c1.7 0 3 1.3 3 3v9H22v-9Z" fill="#263946"/>
+  <path d="M22 31h20v11.5c0 1.4-1.1 2.5-2.5 2.5h-15c-1.4 0-2.5-1.1-2.5-2.5V31Z" fill="url(#brass)"/>
+  <path d="M26 37h12" stroke="#fff9e8" stroke-width="3" stroke-linecap="round"/>
+  <path d="M32 17v31" stroke="#0c171c" stroke-opacity=".16" stroke-width="2"/>
+  <circle cx="43.5" cy="44.5" r="3.5" fill="#15242c"/>
+</svg>"""
 
 
 JS = """
