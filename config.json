@@ -9,6 +9,11 @@
   "exclude_patterns": [
     ".DS_Store",
     ".Trash/",
+    ".Trashes/",
+    ".Spotlight-V100/",
+    ".DocumentRevisions-V100/",
+    ".TemporaryItems/",
+    ".fseventsd/",
     "node_modules/",
     ".git/"
   ],

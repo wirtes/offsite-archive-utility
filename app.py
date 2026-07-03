@@ -7,6 +7,7 @@ import argparse
 import html
 import json
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -24,6 +25,13 @@ from urllib.parse import parse_qs, urlparse
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = APP_DIR / "config.json"
 RSYNC_VERSION = "--version"
+RSYNC_PROGRESS_RE = re.compile(
+    r"^\s*(?P<transferred>[\d.,]+[A-Za-z]*)\s+"
+    r"(?P<percent>\d+)%\s+"
+    r"(?P<speed>\S+/s)\s+"
+    r"(?P<eta>\S+)"
+    r"(?:\s+\(xfer#(?P<xfer>\d+),\s+to-check=(?P<remaining>\d+)/(?P<total>\d+)\))?"
+)
 
 
 @dataclass
@@ -38,8 +46,20 @@ class Job:
     commands: list[list[str]] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
     ended_at: float | None = None
+    current_source_index: int = 0
+    total_sources: int = 0
+    current_item: str = ""
+    current_file_percent: int | None = None
+    transferred: str = ""
+    speed: str = ""
+    eta: str = ""
+    xfer_count: int | None = None
+    to_check_remaining: int | None = None
+    to_check_total: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        item_percent = item_progress_percent(self)
+        bar_percent = progress_bar_percent(self, item_percent)
         return {
             "id": self.id,
             "disk_id": self.disk_id,
@@ -54,6 +74,24 @@ class Job:
             "commands": self.commands,
             "command": self.commands[0] if self.commands else [],
             "command_label": "\n".join(format_command(command) for command in self.commands),
+            "progress": {
+                "current_source_index": self.current_source_index,
+                "total_sources": self.total_sources,
+                "current_item": self.current_item,
+                "current_file_percent": self.current_file_percent,
+                "transferred": self.transferred,
+                "speed": self.speed,
+                "eta": self.eta,
+                "xfer_count": self.xfer_count,
+                "to_check_remaining": self.to_check_remaining,
+                "to_check_total": self.to_check_total,
+                "item_percent": item_percent,
+                "bar_percent": bar_percent,
+                "indeterminate": bar_percent is None and self.status == "running",
+                "label": progress_label(self, item_percent),
+                "detail": progress_detail(self, item_percent),
+                "meta": progress_meta(self, item_percent),
+            },
             "log": self.log[-500:],
         }
 
@@ -92,6 +130,7 @@ class BackupState:
                 dry_run=dry_run,
                 started_at=time.time(),
                 commands=commands,
+                total_sources=len(commands),
             )
             job.log.append(f"[{timestamp()}] Starting backup to {disk['name']}")
             for command in commands:
@@ -112,11 +151,72 @@ def format_command(command: list[str]) -> str:
     return " ".join(shlex.quote(part) for part in command)
 
 
+def item_progress_percent(job: Job) -> int | None:
+    if job.to_check_remaining is None or not job.to_check_total:
+        return None
+    completed = max(job.to_check_total - job.to_check_remaining, 0)
+    return min(100, max(0, round((completed / job.to_check_total) * 100)))
+
+
+def progress_label(job: Job, item_percent: int | None = None) -> str:
+    if job.status == "completed":
+        return "Backup completed"
+    if job.status == "failed":
+        return "Backup failed"
+    if job.current_file_percent is not None and job.current_item:
+        return f"Copying {job.current_item} ({job.current_file_percent}%)"
+    if job.current_item:
+        return f"Scanning {job.current_item}"
+    if job.current_source_index and job.total_sources:
+        return f"Running source {job.current_source_index} of {job.total_sources}"
+    return "Preparing backup"
+
+
+def update_job_progress_from_line(job: Job, line: str) -> None:
+    progress_match = RSYNC_PROGRESS_RE.match(line)
+    if progress_match:
+        job.current_file_percent = int(progress_match.group("percent"))
+        job.transferred = progress_match.group("transferred")
+        job.speed = progress_match.group("speed")
+        job.eta = progress_match.group("eta")
+        if progress_match.group("xfer"):
+            job.xfer_count = int(progress_match.group("xfer"))
+        if progress_match.group("remaining") and progress_match.group("total"):
+            job.to_check_remaining = int(progress_match.group("remaining"))
+            job.to_check_total = int(progress_match.group("total"))
+        return
+
+    candidate = line.strip()
+    if is_progress_item_line(candidate):
+        job.current_item = candidate
+        job.current_file_percent = None
+
+
+def is_progress_item_line(line: str) -> bool:
+    if not line or line.startswith("[") or line.startswith("$ "):
+        return False
+    if line.startswith("rsync(") or line.startswith("warning:"):
+        return False
+    if "Operation not permitted" in line or "codec can't decode" in line:
+        return False
+    return line not in {"./", "."}
+
+
 def default_config() -> dict[str, Any]:
     return {
         "rsync_path": "/usr/bin/rsync",
         "rsync_options": ["-aE", "--delete", "--progress", "--human-readable"],
-        "exclude_patterns": [".DS_Store", ".Trash/", "node_modules/", ".git/"],
+        "exclude_patterns": [
+            ".DS_Store",
+            ".Trash/",
+            ".Trashes/",
+            ".Spotlight-V100/",
+            ".DocumentRevisions-V100/",
+            ".TemporaryItems/",
+            ".fseventsd/",
+            "node_modules/",
+            ".git/",
+        ],
         "sources": [
             {
                 "id": "home-documents",
@@ -271,18 +371,31 @@ def run_job(state: BackupState, job_id: str) -> None:
         failed_returncode = 0
         for index, command in enumerate(commands, start=1):
             with state.lock:
-                state.jobs[job_id].log.append(f"[{timestamp()}] Source {index} of {len(commands)}")
+                job = state.jobs[job_id]
+                job.current_source_index = index
+                job.total_sources = len(commands)
+                job.current_item = ""
+                job.current_file_percent = None
+                job.transferred = ""
+                job.speed = ""
+                job.eta = ""
+                job.log.append(f"[{timestamp()}] Source {index} of {len(commands)}")
             process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
             )
             assert process.stdout is not None
             for line in process.stdout:
                 with state.lock:
-                    state.jobs[job_id].log.append(line.rstrip())
+                    job = state.jobs[job_id]
+                    clean_line = line.rstrip()
+                    update_job_progress_from_line(job, clean_line)
+                    job.log.append(clean_line)
             returncode = process.wait()
             if returncode != 0:
                 failed_returncode = returncode
@@ -291,6 +404,8 @@ def run_job(state: BackupState, job_id: str) -> None:
             job = state.jobs[job_id]
             job.returncode = failed_returncode
             job.status = "completed" if failed_returncode == 0 else "failed"
+            if job.status == "completed":
+                job.current_file_percent = 100
             job.ended_at = time.time()
             job.log.append(f"[{timestamp()}] rsync exited with code {failed_returncode}")
             state.active_job_id = None
@@ -597,14 +712,67 @@ def render_disk_card(disk: dict[str, Any], running: bool) -> str:
 def render_job_card(job: Job) -> str:
     log = escape("\n".join(job.log[-80:]))
     dry = "dry run" if job.dry_run else "live"
+    item_percent = item_progress_percent(job)
+    bar_percent = progress_bar_percent(job, item_percent)
+    bar_width = 100 if bar_percent is None else bar_percent
     return f"""<article class="job" data-job-id="{escape(job.id)}">
   <div class="job-head">
     <div><strong>{escape(job.disk_name)}</strong><span>{escape(timestamp(job.started_at))} · {dry}</span></div>
     <span class="job-status {escape(job.status)}">{escape(job.status)}</span>
   </div>
+  <div class="progress-panel">
+    <div class="progress-top">
+      <strong>{escape(progress_label(job, item_percent))}</strong>
+      <span>{escape(progress_detail(job, item_percent))}</span>
+    </div>
+    <div class="progress-track" aria-label="Backup progress">
+      <div class="progress-fill {escape("indeterminate" if bar_percent is None and job.status == "running" else "")}" style="width: {bar_width}%"></div>
+    </div>
+    <div class="progress-meta">{escape(progress_meta(job, item_percent))}</div>
+  </div>
   <code>{escape(chr(10).join(format_command(command) for command in job.commands))}</code>
   <pre>{log}</pre>
 </article>"""
+
+
+def progress_bar_percent(job: Job, item_percent: int | None) -> int | None:
+    if job.status == "completed":
+        return 100
+    if job.status == "failed":
+        if item_percent is not None:
+            return item_percent
+        if job.current_file_percent is not None:
+            return job.current_file_percent
+        return 100
+    if item_percent is not None:
+        return item_percent
+    return job.current_file_percent
+
+
+def progress_detail(job: Job, item_percent: int | None) -> str:
+    parts = []
+    if job.current_source_index and job.total_sources:
+        parts.append(f"Source {job.current_source_index} of {job.total_sources}")
+    if item_percent is not None:
+        parts.append(f"{item_percent}% of known items")
+    elif job.current_file_percent is not None:
+        parts.append(f"{job.current_file_percent}% of current file")
+    return " · ".join(parts) or "Waiting for rsync"
+
+
+def progress_meta(job: Job, item_percent: int | None) -> str:
+    parts = []
+    if job.transferred:
+        parts.append(f"Transferred {job.transferred}")
+    if job.speed:
+        parts.append(job.speed)
+    if job.eta:
+        parts.append(f"ETA {job.eta}")
+    if job.xfer_count is not None:
+        parts.append(f"{job.xfer_count} files transferred")
+    if item_percent is not None and job.to_check_remaining is not None and job.to_check_total is not None:
+        parts.append(f"{job.to_check_remaining} of {job.to_check_total} items left")
+    return " · ".join(parts) or "rsync is starting up"
 
 
 def escape(value: Any) -> str:
@@ -694,6 +862,35 @@ th { color: var(--muted); font-size: 13px; }
 .job-status.running { background: #eef3f7; color: #2b5872; }
 .job-status.completed { background: #e8f5ee; color: var(--ok); }
 .job-status.failed { background: #fff0ef; color: var(--danger); }
+.progress-panel {
+  background: #f8fafb; border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px; margin-bottom: 10px;
+}
+.progress-top {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
+  margin-bottom: 9px;
+}
+.progress-top strong { overflow-wrap: anywhere; }
+.progress-top span, .progress-meta { color: var(--muted); font-size: 13px; }
+.progress-track {
+  height: 12px; border-radius: 999px; background: #dce5ea; overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(22, 35, 45, 0.05);
+}
+.progress-fill {
+  height: 100%; min-width: 8px; border-radius: inherit; background: var(--accent);
+  transition: width 220ms ease;
+}
+.progress-fill.indeterminate {
+  width: 100%; min-width: 100%;
+  background: linear-gradient(90deg, #dce5ea 0%, var(--accent) 35%, #dce5ea 70%);
+  background-size: 220% 100%;
+  animation: progress-scan 1.25s linear infinite;
+}
+.progress-meta { margin-top: 8px; }
+@keyframes progress-scan {
+  from { background-position: 140% 0; }
+  to { background-position: -80% 0; }
+}
 code {
   display: block; background: #f3f6f8; border-radius: 6px; padding: 9px 10px;
   margin-bottom: 10px; overflow-x: auto; white-space: pre;
@@ -790,10 +987,27 @@ async function refreshJobs() {
         <div><strong>${escapeHtml(job.disk_name)}</strong><span>${escapeHtml(job.started_at_label)} · ${job.dry_run ? "dry run" : "live"}</span></div>
         <span class="job-status ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
       </div>
+      ${renderProgress(job)}
       <code>${escapeHtml(job.command_label)}</code>
       <pre>${escapeHtml(job.log.join("\\n"))}</pre>
     </article>`).join("");
   document.querySelector("#jobs").innerHTML = jobs;
+}
+
+function renderProgress(job) {
+  const progress = job.progress || {};
+  const barPercent = progress.bar_percent ?? 100;
+  const fillClass = progress.indeterminate ? "progress-fill indeterminate" : "progress-fill";
+  return `<div class="progress-panel">
+    <div class="progress-top">
+      <strong>${escapeHtml(progress.label || "Preparing backup")}</strong>
+      <span>${escapeHtml(progress.detail || "Waiting for rsync")}</span>
+    </div>
+    <div class="progress-track" aria-label="Backup progress">
+      <div class="${fillClass}" style="width: ${barPercent}%"></div>
+    </div>
+    <div class="progress-meta">${escapeHtml(progress.meta || "rsync is starting up")}</div>
+  </div>`;
 }
 
 function updateDiskButtons(state) {
