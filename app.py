@@ -254,7 +254,8 @@ def build_rsync_commands(config: dict[str, Any], disk: dict[str, Any], dry_run: 
         if not path.exists():
             raise ValueError(f"Source does not exist: {path}")
         source_destination = destination_root / source["id"]
-        source_destination.mkdir(parents=True, exist_ok=True)
+        if not dry_run:
+            source_destination.mkdir(parents=True, exist_ok=True)
         commands.append([*base_command, str(path) + "/", str(source_destination) + "/"])
     if not commands:
         raise ValueError("No enabled sources are configured.")
@@ -567,7 +568,7 @@ def render_disk_card(disk: dict[str, Any], running: bool) -> str:
     disabled = "disabled" if running or not disk["available"] else ""
     status_class = "ok" if disk["available"] else "bad"
     status_text = "Mounted" if disk["available"] else "Not mounted"
-    return f"""<article class="disk-card">
+    return f"""<article class="disk-card" data-disk-id="{escape(disk["id"])}" data-available="{str(disk["available"]).lower()}">
   <div>
     <h3>{escape(disk["name"])}</h3>
     <p>{escape(disk["destination"])}</p>
@@ -575,7 +576,7 @@ def render_disk_card(disk: dict[str, Any], running: bool) -> str:
   </div>
   <form method="post" action="/start">
     <input type="hidden" name="disk_id" value="{escape(disk["id"])}">
-    <label class="check"><input type="checkbox" name="dry_run" checked> Dry run</label>
+    <label class="check"><input type="checkbox" name="dry_run"> Dry run</label>
     <button type="submit" {disabled}>Run rsync</button>
   </form>
 </article>"""
@@ -748,6 +749,7 @@ async function refreshJobs() {
   const active = state.active_job;
   document.querySelector("#refresh-status").textContent =
     active ? `Running ${active.disk_name}` : "Updates every 2 seconds";
+  updateDiskButtons(state);
   if (state.jobs.length === 0) return;
   const jobs = state.jobs.map((job) => `
     <article class="job" data-job-id="${job.id}">
@@ -759,6 +761,17 @@ async function refreshJobs() {
       <pre>${escapeHtml(job.log.join("\\n"))}</pre>
     </article>`).join("");
   document.querySelector("#jobs").innerHTML = jobs;
+}
+
+function updateDiskButtons(state) {
+  const disksById = new Map(state.backup_disks.map((disk) => [disk.id, disk]));
+  document.querySelectorAll(".disk-card").forEach((card) => {
+    const disk = disksById.get(card.dataset.diskId);
+    const available = disk ? disk.available : card.dataset.available === "true";
+    const button = card.querySelector('button[type="submit"]');
+    if (button) button.disabled = Boolean(state.active_job) || !available;
+    card.dataset.available = String(available);
+  });
 }
 
 function escapeHtml(value) {
