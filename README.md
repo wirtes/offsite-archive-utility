@@ -29,8 +29,8 @@ The default run button starts in dry-run mode. Uncheck **Dry run** when you are 
 - `rsync_path`: Path to the `rsync` executable, usually `/usr/bin/rsync`.
 - `rsync_options`: Arguments passed to every rsync run.
 - `exclude_patterns`: Patterns passed as `--exclude`.
-- `sources`: Directories or mounted volumes to copy.
-- `backup_disks`: Rotating disks with mount paths and destination subdirectories.
+- `sources`: Directories or mounted volumes to copy. Each source `id` is used as the backup subdirectory under each destination disk.
+- `backup_disks`: Rotating disks with mount paths and destination subdirectories. Disk `id` is the stable internal key; disk `name` is the human-friendly display name.
 
 ## Notes
 

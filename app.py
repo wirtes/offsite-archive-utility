@@ -218,8 +218,7 @@ def default_config() -> dict[str, Any]:
         ],
         "sources": [
             {
-                "id": "home-documents",
-                "label": "Documents",
+                "id": "documents",
                 "path": str(Path.home() / "Documents"),
                 "enabled": True,
             }
@@ -268,10 +267,10 @@ def validate_config(config: dict[str, Any]) -> None:
 
     source_ids = set()
     for source in config["sources"]:
-        require_fields(source, ("id", "label", "path"), "source")
-        validate_path_segment(source["id"], "source id")
+        require_fields(source, ("id", "path"), "source")
+        validate_path_segment(source["id"], "source backup subdirectory")
         if source["id"] in source_ids:
-            raise ValueError(f"Duplicate source id: {source['id']}")
+            raise ValueError(f"Duplicate source backup subdirectory: {source['id']}")
         source_ids.add(source["id"])
 
     disk_ids = set()
@@ -463,11 +462,10 @@ def parse_source_rows(data: dict[str, list[str]]) -> list[dict[str, Any]]:
     for index in range(len(ids)):
         row = {
             "id": ids[index].strip(),
-            "label": data.get("source_label", [""] * len(ids))[index].strip(),
             "path": data.get("source_path", [""] * len(ids))[index].strip(),
             "enabled": data.get(f"source_enabled_{index}", ["off"])[0] == "on",
         }
-        if any(str(row.get(field_name, "")).strip() for field_name in ("id", "label", "path")):
+        if any(str(row.get(field_name, "")).strip() for field_name in ("id", "path")):
             rows.append(row)
     return rows
 
@@ -604,7 +602,10 @@ def render_page(state: BackupState, error: str = "") -> str:
     <section class="panel">
       <div class="section-heading">
         <h2>Run Backup</h2>
-        <span class="muted">Mounted disks are ready to run.</span>
+        <div class="heading-actions">
+          <span class="muted">Mounted disks are ready to run.</span>
+          <button type="button" class="secondary compact" id="refresh-disks">Refresh disks</button>
+        </div>
       </div>
       <div class="disk-grid">{disk_cards}</div>
     </section>
@@ -612,7 +613,7 @@ def render_page(state: BackupState, error: str = "") -> str:
     <section class="panel">
       <div class="section-heading">
         <h2>Activity</h2>
-        <span id="refresh-status" class="muted">Updates every 2 seconds</span>
+        <span id="refresh-status" class="muted">{escape("Backup running" if active_job else "Idle")}</span>
       </div>
       <div id="jobs">{job_cards}</div>
     </section>
@@ -645,7 +646,7 @@ def render_page(state: BackupState, error: str = "") -> str:
           </div>
           <div class="table-wrap">
             <table id="sources-table">
-              <thead><tr><th>Enabled</th><th>ID</th><th>Label</th><th>Path</th><th></th></tr></thead>
+              <thead><tr><th>Enabled</th><th>Backup subdirectory</th><th>Path</th><th></th></tr></thead>
               <tbody>{source_rows}</tbody>
             </table>
           </div>
@@ -657,6 +658,7 @@ def render_page(state: BackupState, error: str = "") -> str:
             <h3>Backup disks</h3>
             <p>Write target. These mounted destinations will be written to and may have files deleted when --delete is enabled.</p>
           </div>
+          <p class="field-note">ID is the stable internal key used by the tool. Name is the human-friendly display name shown in the Run Backup and Activity sections.</p>
           <div class="table-wrap">
             <table id="disks-table">
               <thead><tr><th>ID</th><th>Name</th><th>Mount path</th><th>Destination subdir</th><th></th></tr></thead>
@@ -682,8 +684,7 @@ def render_source_row(source: dict[str, Any], index: int) -> str:
     badge = "<span class='ok'>Found</span>" if source["exists"] else "<span class='bad'>Missing</span>"
     return f"""<tr>
   <td><input type="checkbox" name="source_enabled_{index}" {checked}></td>
-  <td><input name="source_id" value="{escape(source["id"])}"></td>
-  <td><input name="source_label" value="{escape(source["label"])}"></td>
+  <td><input name="source_id" value="{escape(source["id"])}" placeholder="backup-subdirectory"></td>
   <td><input name="source_path" value="{escape(source["path"])}"><div class="row-note">{badge}</div></td>
   <td><button type="button" class="icon" data-remove-row>Remove</button></td>
 </tr>"""
@@ -694,7 +695,7 @@ def render_disk_row(disk: dict[str, Any]) -> str:
     return f"""<tr>
   <td><input name="disk_id" value="{escape(disk["id"])}"></td>
   <td><input name="disk_name" value="{escape(disk["name"])}"></td>
-  <td><input name="disk_mount_path" value="{escape(disk["mount_path"])}"><div class="row-note">{badge}</div></td>
+  <td><input name="disk_mount_path" value="{escape(disk["mount_path"])}"><div class="row-note" data-disk-row-status="{escape(disk["id"])}">{badge}</div></td>
   <td><input name="disk_destination_subdir" value="{escape(disk["destination_subdir"])}"></td>
   <td><button type="button" class="icon" data-remove-row>Remove</button></td>
 </tr>"""
@@ -708,7 +709,7 @@ def render_disk_card(disk: dict[str, Any], running: bool) -> str:
   <div>
     <h3>{escape(disk["name"])}</h3>
     <p>{escape(disk["destination"])}</p>
-    <span class="{status_class}">{status_text}</span>
+    <span class="{status_class}" data-disk-status>{status_text}</span>
   </div>
   <form method="post" action="/start">
     <input type="hidden" name="disk_id" value="{escape(disk["id"])}">
@@ -836,6 +837,7 @@ main { width: min(1180px, calc(100vw - 32px)); margin: 24px auto 56px; }
 .section-heading {
   display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 18px;
 }
+.heading-actions { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
 .refresh-control {
   display: inline-flex; align-items: center; gap: 8px; margin: 0; color: var(--muted);
   font-size: 13px; font-weight: 650; white-space: nowrap;
@@ -879,6 +881,7 @@ button:disabled { background: #a8b4c0; cursor: not-allowed; }
 button.secondary, button.icon { background: #edf2f5; color: #263442; }
 button.secondary:hover, button.icon:hover { background: #dfe8ee; }
 button.icon { min-height: 34px; padding: 7px 10px; }
+button.compact { width: auto; min-height: 34px; padding: 7px 10px; }
 .actions { margin-top: 18px; display: flex; justify-content: flex-end; }
 .table-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
 table { width: 100%; border-collapse: collapse; min-width: 760px; }
@@ -894,6 +897,7 @@ th { color: var(--muted); font-size: 13px; }
   display: flex; align-items: baseline; justify-content: space-between; gap: 18px; margin-bottom: 12px;
 }
 .zone-heading p { margin: 0; font-size: 13px; font-weight: 650; }
+.field-note { margin: -4px 0 12px; color: var(--muted); font-size: 13px; }
 .sources-zone { background: #eef8f1; border-color: #b9dec5; }
 .sources-zone .zone-heading p { color: #17603a; }
 .disks-zone { background: #fff1ef; border-color: #efb8b0; }
@@ -951,7 +955,7 @@ pre {
 }
 .log-details pre { border-radius: 0; }
 @media (max-width: 720px) {
-  header, .section-heading, .job-head, .zone-heading { align-items: flex-start; flex-direction: column; }
+  header, .section-heading, .job-head, .zone-heading, .heading-actions { align-items: flex-start; flex-direction: column; }
   .disk-card form { align-items: stretch; flex-direction: column; }
   button { width: 100%; }
 }
@@ -984,8 +988,7 @@ function rowHtml(type) {
   if (type === "source") {
     return `<tr>
       <td><input type="checkbox" name="source_enabled" checked></td>
-      <td><input name="source_id" value=""></td>
-      <td><input name="source_label" value=""></td>
+      <td><input name="source_id" value="" placeholder="backup-subdirectory"></td>
       <td><input name="source_path" value=""></td>
       <td><button type="button" class="icon" data-remove-row>Remove</button></td>
     </tr>`;
@@ -1023,17 +1026,28 @@ function reindexSourceCheckboxes() {
   });
 }
 
-async function refreshJobs() {
+async function refreshState({ manual = false } = {}) {
   const response = await fetch("/api/state", { cache: "no-store" });
   if (!response.ok) return;
   const state = await response.json();
   const activityState = captureActivityState();
   const active = state.active_job;
-  document.querySelector("#refresh-status").textContent =
-    active ? `Running ${active.disk_name}` : refreshStatusText();
-  updateDiskButtons(state);
-  if (state.jobs.length === 0) return;
-  const jobs = state.jobs.map((job) => `
+  isBackupRunning = Boolean(active);
+  updateDiskCards(state);
+  renderJobs(state.jobs, activityState);
+  syncRefreshSelectors();
+  document.querySelector("#refresh-status").textContent = active
+    ? `Running ${active.disk_name}`
+    : (manual ? "Disk status refreshed" : "Idle");
+  scheduleActiveRefresh();
+}
+
+function renderJobs(jobs, activityState = captureActivityState()) {
+  if (jobs.length === 0) {
+    document.querySelector("#jobs").innerHTML = "<p class='muted'>No backup jobs yet.</p>";
+    return;
+  }
+  const html = jobs.map((job) => `
     <article class="job" data-job-id="${job.id}">
       <div class="job-head">
         <div><strong>${escapeHtml(job.disk_name)}</strong><span>${escapeHtml(job.started_at_label)} · ${job.dry_run ? "dry run" : "live"}</span></div>
@@ -1046,7 +1060,7 @@ async function refreshJobs() {
         <pre>${escapeHtml(job.log.join("\\n"))}</pre>
       </details>
     </article>`).join("");
-  document.querySelector("#jobs").innerHTML = jobs;
+  document.querySelector("#jobs").innerHTML = html;
   restoreActivityState(activityState);
   syncRefreshSelectors();
 }
@@ -1101,14 +1115,24 @@ function renderProgress(job) {
   </div>`;
 }
 
-function updateDiskButtons(state) {
+function updateDiskCards(state) {
   const disksById = new Map(state.backup_disks.map((disk) => [disk.id, disk]));
   document.querySelectorAll(".disk-card").forEach((card) => {
     const disk = disksById.get(card.dataset.diskId);
     const available = disk ? disk.available : card.dataset.available === "true";
     const button = card.querySelector('button[type="submit"]');
     if (button) button.disabled = Boolean(state.active_job) || !available;
+    const status = card.querySelector("[data-disk-status]");
+    if (status) {
+      status.textContent = available ? "Mounted" : "Not mounted";
+      status.className = available ? "ok" : "bad";
+    }
     card.dataset.available = String(available);
+  });
+  document.querySelectorAll("[data-disk-row-status]").forEach((statusWrap) => {
+    const disk = disksById.get(statusWrap.dataset.diskRowStatus);
+    if (!disk) return;
+    statusWrap.innerHTML = disk.available ? "<span class='ok'>Mounted</span>" : "<span class='bad'>Not mounted</span>";
   });
 }
 
@@ -1122,18 +1146,20 @@ function escapeHtml(value) {
 }
 
 let refreshTimer = null;
+let isBackupRunning = Boolean(document.body.dataset.activeJob);
 let refreshIntervalValue = window.localStorage.getItem("offsite-refresh-interval") || "2000";
 if (refreshIntervalValue === "60001") refreshIntervalValue = "60000";
 if (!["1000", "2000", "5000", "10000", "30000", "60000"].includes(refreshIntervalValue)) {
   refreshIntervalValue = "2000";
 }
 
-function scheduleRefresh() {
-  if (refreshTimer) window.clearInterval(refreshTimer);
-  const interval = refreshIntervalMs();
+function scheduleActiveRefresh() {
+  if (refreshTimer) window.clearTimeout(refreshTimer);
+  refreshTimer = null;
   syncRefreshSelectors();
-  refreshTimer = window.setInterval(refreshJobs, interval);
-  document.querySelector("#refresh-status").textContent = refreshStatusText();
+  if (!isBackupRunning) return;
+  const interval = refreshIntervalMs();
+  refreshTimer = window.setTimeout(() => refreshState(), interval);
 }
 
 function refreshStatusText() {
@@ -1157,13 +1183,23 @@ document.addEventListener("change", (event) => {
   if (selector) {
     refreshIntervalValue = selector.value;
     window.localStorage.setItem("offsite-refresh-interval", refreshIntervalValue);
-    scheduleRefresh();
-    refreshJobs();
+    syncRefreshSelectors();
+    if (isBackupRunning) {
+      scheduleActiveRefresh();
+      refreshState();
+    }
   }
 });
 
-scheduleRefresh();
-refreshJobs();
+document.querySelector("#refresh-disks")?.addEventListener("click", () => {
+  refreshState({ manual: true });
+});
+
+syncRefreshSelectors();
+if (isBackupRunning) {
+  scheduleActiveRefresh();
+  refreshState();
+}
 """
 
 

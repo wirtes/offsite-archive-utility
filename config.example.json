@@ -19,8 +19,7 @@
   ],
   "sources": [
     {
-      "id": "home-documents",
-      "label": "Documents",
+      "id": "documents",
       "path": "/Users/you/Documents",
       "enabled": true
     }

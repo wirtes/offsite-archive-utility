@@ -3,10 +3,21 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from app import BackupState, Job, build_rsync_commands, render_disk_card, render_job_card, run_job, update_job_progress_from_line
+from app import BackupState, Job, build_rsync_commands, render_disk_card, render_job_card, render_page, run_job, update_job_progress_from_line
 
 
 class RsyncCommandTests(unittest.TestCase):
+    def test_sources_table_labels_id_as_backup_subdirectory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = BackupState(Path(tmp) / "config.json")
+
+            html = render_page(state)
+
+            self.assertIn("Backup subdirectory", html)
+            self.assertIn('placeholder="backup-subdirectory"', html)
+            self.assertNotIn("<th>Label</th>", html)
+            self.assertIn("ID is the stable internal key", html)
+
     def test_dry_run_does_not_create_destination_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -48,6 +59,7 @@ class RsyncCommandTests(unittest.TestCase):
 
         self.assertIn('name="dry_run"', html)
         self.assertNotIn('name="dry_run" checked', html)
+        self.assertIn("data-disk-status", html)
         self.assertIn('class="refresh-interval"', html)
         self.assertIn('value="30000"', html)
         self.assertIn('value="60000"', html)
@@ -151,7 +163,6 @@ def config_for(source: Path) -> dict:
         "sources": [
             {
                 "id": "source-one",
-                "label": "Source One",
                 "path": str(source),
                 "enabled": True,
             }
