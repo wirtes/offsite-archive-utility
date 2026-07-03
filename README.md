@@ -8,7 +8,7 @@ A small local web UI for rotating offsite backup disks on macOS. Configure one o
 python3 app.py
 ```
 
-Open http://127.0.0.1:8585.
+Open http://127.0.0.1:8585 on the backup Mac, or use `http://<mac-lan-ip>:8585` from another device on the same local network.
 
 The first run creates `config.json` next to `app.py`. You can edit it directly or use the Configuration section in the web UI.
 
@@ -35,5 +35,6 @@ The default run button starts in dry-run mode. Uncheck **Dry run** when you are 
 ## Notes
 
 - Keep disk `mount_path` values aligned with the volume names macOS shows under `/Volumes`.
-- The app binds to `127.0.0.1` by default, so it is only reachable from the local machine.
+- The app binds to `0.0.0.0` by default, so it is reachable from other devices on your local network if macOS Firewall allows incoming connections.
+- To restrict it to the backup Mac only, run `python3 app.py --host 127.0.0.1`.
 - Only one backup job runs at a time.

@@ -776,9 +776,9 @@ refreshJobs();
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Local rsync web UI for rotating offsite disks.")
+    parser = argparse.ArgumentParser(description="LAN-accessible rsync web UI for rotating offsite disks.")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH, help="Path to JSON config file.")
-    parser.add_argument("--host", default="127.0.0.1", help="Bind host.")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind host.")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8585")), help="Bind port.")
     return parser.parse_args()
 
