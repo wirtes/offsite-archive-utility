@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from app import BackupState, Job, build_rsync_commands, render_disk_card, run_job, update_job_progress_from_line
+from app import BackupState, Job, build_rsync_commands, render_disk_card, render_job_card, run_job, update_job_progress_from_line
 
 
 class RsyncCommandTests(unittest.TestCase):
@@ -48,6 +48,24 @@ class RsyncCommandTests(unittest.TestCase):
 
         self.assertIn('name="dry_run"', html)
         self.assertNotIn('name="dry_run" checked', html)
+        self.assertIn('class="refresh-interval"', html)
+
+    def test_job_log_renders_collapsed_details(self) -> None:
+        job = Job(
+            id="job-one",
+            disk_id="offsite-a",
+            disk_name="Offsite A",
+            dry_run=False,
+            started_at=0,
+            commands=[["/usr/bin/rsync", "/source/", "/dest/"]],
+            log=["line one"],
+        )
+
+        html = render_job_card(job)
+
+        self.assertIn('<details class="log-details">', html)
+        self.assertIn("<summary>Activity log</summary>", html)
+        self.assertNotIn("<details open", html)
 
     def test_job_log_replaces_undecodable_rsync_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

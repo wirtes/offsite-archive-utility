@@ -639,23 +639,33 @@ def render_page(state: BackupState, error: str = "") -> str:
           <textarea name="exclude_patterns" rows="4">{escape(chr(10).join(config.get("exclude_patterns", [])))}</textarea>
         </label>
 
-        <h3>Sources</h3>
-        <div class="table-wrap">
-          <table id="sources-table">
-            <thead><tr><th>Enabled</th><th>ID</th><th>Label</th><th>Path</th><th></th></tr></thead>
-            <tbody>{source_rows}</tbody>
-          </table>
+        <div class="config-zone sources-zone">
+          <div class="zone-heading">
+            <h3>Sources</h3>
+            <p>Read only. These locations are scanned and copied from; rsync will not write changes here.</p>
+          </div>
+          <div class="table-wrap">
+            <table id="sources-table">
+              <thead><tr><th>Enabled</th><th>ID</th><th>Label</th><th>Path</th><th></th></tr></thead>
+              <tbody>{source_rows}</tbody>
+            </table>
+          </div>
+          <button type="button" class="secondary" data-add-row="source">Add source</button>
         </div>
-        <button type="button" class="secondary" data-add-row="source">Add source</button>
 
-        <h3>Backup disks</h3>
-        <div class="table-wrap">
-          <table id="disks-table">
-            <thead><tr><th>ID</th><th>Name</th><th>Mount path</th><th>Destination subdir</th><th></th></tr></thead>
-            <tbody>{disk_rows}</tbody>
-          </table>
+        <div class="config-zone disks-zone">
+          <div class="zone-heading">
+            <h3>Backup disks</h3>
+            <p>Write target. These mounted destinations will be written to and may have files deleted when --delete is enabled.</p>
+          </div>
+          <div class="table-wrap">
+            <table id="disks-table">
+              <thead><tr><th>ID</th><th>Name</th><th>Mount path</th><th>Destination subdir</th><th></th></tr></thead>
+              <tbody>{disk_rows}</tbody>
+            </table>
+          </div>
+          <button type="button" class="secondary" data-add-row="disk">Add disk</button>
         </div>
-        <button type="button" class="secondary" data-add-row="disk">Add disk</button>
 
         <div class="actions">
           <button type="submit">Save configuration</button>
@@ -704,6 +714,15 @@ def render_disk_card(disk: dict[str, Any], running: bool) -> str:
   <form method="post" action="/start">
     <input type="hidden" name="disk_id" value="{escape(disk["id"])}">
     <label class="check"><input type="checkbox" name="dry_run"> Dry run</label>
+    <label class="refresh-control">
+      Refresh
+      <select class="refresh-interval">
+        <option value="1000">1 second</option>
+        <option value="2000" selected>2 seconds</option>
+        <option value="5000">5 seconds</option>
+        <option value="10000">10 seconds</option>
+      </select>
+    </label>
     <button type="submit" {disabled}>Run rsync</button>
   </form>
 </article>"""
@@ -731,7 +750,10 @@ def render_job_card(job: Job) -> str:
     <div class="progress-meta">{escape(progress_meta(job, item_percent))}</div>
   </div>
   <code>{escape(chr(10).join(format_command(command) for command in job.commands))}</code>
-  <pre>{log}</pre>
+  <details class="log-details">
+    <summary>Activity log</summary>
+    <pre>{log}</pre>
+  </details>
 </article>"""
 
 
@@ -813,6 +835,13 @@ main { width: min(1180px, calc(100vw - 32px)); margin: 24px auto 56px; }
 .section-heading {
   display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 18px;
 }
+.refresh-control {
+  display: inline-flex; align-items: center; gap: 8px; margin: 0; color: var(--muted);
+  font-size: 13px; font-weight: 650; white-space: nowrap;
+}
+.refresh-control select {
+  width: auto; min-width: 118px; margin: 0; padding: 7px 30px 7px 10px;
+}
 .status-pill, .ok, .bad, .job-status {
   display: inline-flex; align-items: center; min-height: 26px; border-radius: 999px;
   padding: 3px 10px; font-size: 13px; font-weight: 650;
@@ -856,6 +885,19 @@ th, td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; 
 tr:last-child td { border-bottom: 0; }
 th { color: var(--muted); font-size: 13px; }
 .row-note { margin-top: 7px; }
+.config-zone {
+  border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-top: 18px;
+}
+.config-zone h3 { margin: 0; }
+.zone-heading {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 18px; margin-bottom: 12px;
+}
+.zone-heading p { margin: 0; font-size: 13px; font-weight: 650; }
+.sources-zone { background: #eef8f1; border-color: #b9dec5; }
+.sources-zone .zone-heading p { color: #17603a; }
+.disks-zone { background: #fff1ef; border-color: #efb8b0; }
+.disks-zone .zone-heading p { color: #a5362b; }
+.config-zone .secondary { margin-top: 12px; }
 .job { border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 12px; }
 .job-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .job-head span { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
@@ -899,8 +941,16 @@ pre {
   background: #101820; color: #edf5f7; border-radius: 6px; padding: 12px;
   overflow: auto; max-height: 340px; margin: 0; line-height: 1.45;
 }
+.log-details {
+  border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden;
+}
+.log-details summary {
+  cursor: pointer; padding: 10px 12px; font-weight: 700; color: #263442;
+  list-style-position: inside;
+}
+.log-details pre { border-radius: 0; }
 @media (max-width: 720px) {
-  header, .section-heading, .job-head { align-items: flex-start; flex-direction: column; }
+  header, .section-heading, .job-head, .zone-heading { align-items: flex-start; flex-direction: column; }
   .disk-card form { align-items: stretch; flex-direction: column; }
   button { width: 100%; }
 }
@@ -978,7 +1028,7 @@ async function refreshJobs() {
   const state = await response.json();
   const active = state.active_job;
   document.querySelector("#refresh-status").textContent =
-    active ? `Running ${active.disk_name}` : "Updates every 2 seconds";
+    active ? `Running ${active.disk_name}` : refreshStatusText();
   updateDiskButtons(state);
   if (state.jobs.length === 0) return;
   const jobs = state.jobs.map((job) => `
@@ -989,7 +1039,10 @@ async function refreshJobs() {
       </div>
       ${renderProgress(job)}
       <code>${escapeHtml(job.command_label)}</code>
-      <pre>${escapeHtml(job.log.join("\\n"))}</pre>
+      <details class="log-details">
+        <summary>Activity log</summary>
+        <pre>${escapeHtml(job.log.join("\\n"))}</pre>
+      </details>
     </article>`).join("");
   document.querySelector("#jobs").innerHTML = jobs;
 }
@@ -1030,7 +1083,33 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-setInterval(refreshJobs, 2000);
+let refreshTimer = null;
+
+function scheduleRefresh() {
+  if (refreshTimer) window.clearInterval(refreshTimer);
+  const selector = document.querySelector(".refresh-interval");
+  const interval = Number(selector ? selector.value : 2000);
+  refreshTimer = window.setInterval(refreshJobs, interval);
+  document.querySelector("#refresh-status").textContent = refreshStatusText();
+}
+
+function refreshStatusText() {
+  const selector = document.querySelector(".refresh-interval");
+  const interval = Number(selector ? selector.value : 2000);
+  return `Updates every ${interval / 1000} seconds`;
+}
+
+document.querySelectorAll(".refresh-interval").forEach((selector) => {
+  selector.addEventListener("change", () => {
+    document.querySelectorAll(".refresh-interval").forEach((other) => {
+      other.value = selector.value;
+    });
+    scheduleRefresh();
+    refreshJobs();
+  });
+});
+
+scheduleRefresh();
 refreshJobs();
 """
 
