@@ -240,6 +240,29 @@ class RsyncCommandTests(unittest.TestCase):
         self.assertIn("<summary>Activity log</summary>", html)
         self.assertNotIn("<details open", html)
 
+    def test_running_job_highlights_active_command(self) -> None:
+        job = Job(
+            id="job-one",
+            disk_id="offsite-a",
+            disk_name="Offsite A",
+            dry_run=False,
+            started_at=0,
+            status="running",
+            commands=[
+                ["/usr/bin/rsync", "/source-one/", "/dest-one/"],
+                ["/usr/bin/rsync", "/source-two/", "/dest-two/"],
+            ],
+            current_source_index=2,
+            total_sources=2,
+        )
+
+        payload = job.to_dict()
+        html = render_job_card(job)
+
+        self.assertEqual(1, payload["active_command_index"])
+        self.assertIn('class="command-line active"', html)
+        self.assertIn("/source-two/", html)
+
     def test_job_log_replaces_undecodable_rsync_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.json"
@@ -316,6 +339,9 @@ class RsyncCommandTests(unittest.TestCase):
         self.assertEqual(progress["to_check_total"], 20)
         self.assertEqual(progress["item_percent"], 35)
         self.assertIn("35% of known items left", progress["detail"])
+        self.assertEqual("37.43MB/s · 7 of 20 items left", progress["meta"])
+        self.assertNotIn("Transferred", progress["meta"])
+        self.assertNotIn("files transferred", progress["meta"])
         self.assertFalse(progress["indeterminate"])
 
     def test_running_job_without_numbers_is_indeterminate(self) -> None:

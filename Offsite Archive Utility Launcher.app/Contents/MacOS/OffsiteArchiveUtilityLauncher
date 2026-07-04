@@ -1,15 +1,49 @@
 #!/bin/zsh
 set -u
 
-APP_DIR="/Users/wirtes/Code/Codex Projects/offsite-archive-utility"
-LAUNCHER="${APP_DIR}/Launch Offsite Archive Utility.command"
+CONFIG_DIR="${HOME}/Library/Application Support/Offsite Archive Utility Launcher"
+CONFIG_FILE="${CONFIG_DIR}/app_dir"
 
-if [ ! -x "${LAUNCHER}" ]; then
-  osascript -e 'display alert "Offsite Archive Utility launcher not found" message "Could not find the launcher script. If the repo moved, update APP_DIR inside this app bundle." as critical'
+prompt_for_app_dir() {
+  local selected
+  selected=$(osascript <<'APPLESCRIPT'
+try
+  set chosenFolder to choose folder with prompt "Choose the offsite-archive-utility repo folder:"
+  POSIX path of chosenFolder
+on error
+  return ""
+end try
+APPLESCRIPT
+)
+  selected="${selected%/}"
+  if [ -z "${selected}" ]; then
+    exit 1
+  fi
+  if [ ! -f "${selected}/app.py" ]; then
+    osascript -e 'display alert "Wrong folder" message "That folder does not contain app.py. Choose the offsite-archive-utility repo folder next time." as critical'
+    exit 1
+  fi
+  mkdir -p "${CONFIG_DIR}"
+  printf '%s\n' "${selected}" > "${CONFIG_FILE}"
+  echo "${selected}"
+}
+
+APP_DIR=""
+if [ -f "${CONFIG_FILE}" ]; then
+  APP_DIR="$(cat "${CONFIG_FILE}")"
+fi
+
+if [ -z "${APP_DIR}" ] || [ ! -f "${APP_DIR}/app.py" ]; then
+  APP_DIR="$(prompt_for_app_dir)"
+fi
+
+if [ ! -f "${APP_DIR}/app.py" ]; then
+  osascript -e 'display alert "Offsite Archive Utility not found" message "The configured folder does not contain app.py. Delete ~/Library/Application Support/Offsite Archive Utility Launcher/app_dir and launch again to choose a new folder." as critical'
   exit 1
 fi
 
-terminal_command="cd /Users/wirtes/Code/Codex\\ Projects/offsite-archive-utility && ./Launch\\ Offsite\\ Archive\\ Utility.command"
+escaped_app_dir="${(q)APP_DIR}"
+terminal_command="cd ${escaped_app_dir}; echo Starting Offsite Archive Utility...; echo App folder: ${escaped_app_dir}; echo Web UI: http://127.0.0.1:8585; echo; echo Leave this Terminal window open while you use the backup website.; echo Close this window or press Ctrl-C here to stop the website.; echo; (sleep 1; open http://127.0.0.1:8585 >/dev/null 2>&1) & python3 app.py; echo; echo Offsite Archive Utility stopped.; echo Press Return to close this window.; read -r"
 
 osascript \
   -e 'tell application "Terminal"' \

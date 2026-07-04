@@ -76,6 +76,8 @@ class Job:
             "commands": self.commands,
             "command": self.commands[0] if self.commands else [],
             "command_label": "\n".join(format_command(command) for command in self.commands),
+            "command_labels": [format_command(command) for command in self.commands],
+            "active_command_index": max(0, self.current_source_index - 1) if self.status == "running" and self.current_source_index else None,
             "progress": {
                 "current_source_index": self.current_source_index,
                 "total_sources": self.total_sources,
@@ -965,12 +967,24 @@ def render_job_card(job: Job) -> str:
     </div>
     <div class="progress-meta">{escape(progress_meta(job, item_percent))}</div>
   </div>
-  <code>{escape(chr(10).join(format_command(command) for command in job.commands))}</code>
+  {render_command_list(job)}
   <details class="log-details">
     <summary>Activity log</summary>
     <pre>{log}</pre>
   </details>
 </article>"""
+
+
+def render_command_list(job: Job) -> str:
+    if not job.commands:
+        return "<div class=\"command-list\"></div>"
+
+    active_index = job.current_source_index - 1 if job.status == "running" and job.current_source_index else None
+    lines = []
+    for index, command in enumerate(job.commands):
+        active_class = " active" if active_index == index else ""
+        lines.append(f"""<code class="command-line{active_class}">{escape(format_command(command))}</code>""")
+    return f"""<div class="command-list">{''.join(lines)}</div>"""
 
 
 def progress_bar_percent(job: Job, item_percent: int | None) -> int | None:
@@ -1000,14 +1014,8 @@ def progress_detail(job: Job, item_percent: int | None) -> str:
 
 def progress_meta(job: Job, item_percent: int | None) -> str:
     parts = []
-    if job.transferred:
-        parts.append(f"Transferred {job.transferred}")
     if job.speed:
         parts.append(job.speed)
-    if job.eta:
-        parts.append(f"ETA {job.eta}")
-    if job.xfer_count is not None:
-        parts.append(f"{job.xfer_count} files transferred")
     if item_percent is not None and job.to_check_remaining is not None and job.to_check_total is not None:
         parts.append(f"{job.to_check_remaining} of {job.to_check_total} items left")
     return " · ".join(parts) or "rsync is starting up"
@@ -1152,9 +1160,15 @@ th { color: var(--muted); font-size: 13px; }
   from { background-position: 140% 0; }
   to { background-position: -80% 0; }
 }
+.command-list { margin-bottom: 10px; }
+.command-line,
 code {
   display: block; background: #f3f6f8; border-radius: 6px; padding: 9px 10px;
-  margin-bottom: 10px; overflow-x: auto; white-space: pre;
+  margin-bottom: 6px; overflow-x: auto; white-space: pre;
+}
+.command-line.active {
+  background: #fff2a8;
+  box-shadow: inset 0 0 0 1px #e6c84f;
 }
 pre {
   background: #101820; color: #edf5f7; border-radius: 6px; padding: 12px;
@@ -1309,7 +1323,7 @@ function renderJobs(jobs, activityState = captureActivityState()) {
         <span class="job-status ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
       </div>
       ${renderProgress(job)}
-      <code>${escapeHtml(job.command_label)}</code>
+      ${renderCommandList(job)}
       <details class="log-details">
         <summary>Activity log</summary>
         <pre>${escapeHtml(job.log.join("\\n"))}</pre>
@@ -1318,6 +1332,17 @@ function renderJobs(jobs, activityState = captureActivityState()) {
   document.querySelector("#jobs").innerHTML = html;
   restoreActivityState(activityState);
   syncRefreshSelectors();
+}
+
+function renderCommandList(job) {
+  const commands = job.command_labels || [];
+  if (commands.length === 0) return `<div class="command-list"></div>`;
+  const activeIndex = job.active_command_index;
+  const lines = commands.map((command, index) => {
+    const activeClass = activeIndex === index ? " active" : "";
+    return `<code class="command-line${activeClass}">${escapeHtml(command)}</code>`;
+  }).join("");
+  return `<div class="command-list">${lines}</div>`;
 }
 
 function renderTimeline(timeline) {

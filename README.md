@@ -10,7 +10,7 @@ python3 app.py
 
 Open http://127.0.0.1:8585 on the backup Mac, or use `http://<mac-lan-ip>:8585` from another device on the same local network.
 
-For a double-click launcher, move `Offsite Archive Utility Launcher.app` to the Desktop. It opens Terminal, starts the web app from this repo, and opens the local website in your browser. Leave the Terminal window open while running backups. The plain `Launch Offsite Archive Utility.command` script is kept as the underlying launcher.
+For a double-click launcher, move `Offsite Archive Utility Launcher.app` to the Desktop. It opens Terminal, starts the web app, and opens the local website in your browser. On first launch, choose the `offsite-archive-utility` repo folder; the launcher remembers that path in `~/Library/Application Support/Offsite Archive Utility Launcher/app_dir`. Leave the Terminal window open while running backups. The plain `Launch Offsite Archive Utility.command` script is also movable and uses the same saved launcher path.
 
 The first run creates `config.json` next to `app.py`. You can edit it directly or use the Configuration section in the web UI. The app also keeps `backup_history.json` next to the config so the Activity timeline persists across restarts. Both files are ignored by git because they contain machine-specific paths/history; use `config.example.json` as the shareable template.
 
