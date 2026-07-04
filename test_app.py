@@ -1,14 +1,41 @@
+import json
 import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from app import BackupState, Job, build_rsync_commands, default_config, render_disk_card, render_job_card, render_page, run_job, update_job_progress_from_line
+from app import BackupState, Job, build_rsync_commands, default_config, load_config, render_disk_card, render_job_card, render_page, run_job, update_job_progress_from_line
 
 
 class RsyncCommandTests(unittest.TestCase):
     def test_default_config_excludes_appledouble_files(self) -> None:
         self.assertIn("._*", default_config()["exclude_patterns"])
+
+    def test_rsync_command_always_excludes_appledouble_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            mount = root / "BackupDisk"
+            source.mkdir()
+            mount.mkdir()
+
+            command = build_rsync_commands(config_for(source), disk_for(mount), dry_run=True)[0]
+
+            self.assertIn("--exclude", command)
+            self.assertIn("._*", command)
+
+    def test_load_config_adds_builtin_excludes_to_existing_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config = config_for(Path(tmp) / "source")
+            config["exclude_patterns"] = [".DS_Store"]
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            loaded = load_config(config_path)
+            saved = json.loads(config_path.read_text(encoding="utf-8"))
+
+            self.assertIn("._*", loaded["exclude_patterns"])
+            self.assertIn("._*", saved["exclude_patterns"])
 
     def test_sources_table_labels_id_as_backup_subdirectory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

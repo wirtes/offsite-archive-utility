@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, urlparse
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = APP_DIR / "config.json"
 RSYNC_VERSION = "--version"
+BUILT_IN_EXCLUDE_PATTERNS = ("._*",)
 RSYNC_PROGRESS_RE = re.compile(
     r"^\s*(?P<transferred>[\d.,]+[A-Za-z]*)\s+"
     r"(?P<percent>\d+)%\s+"
@@ -255,8 +256,24 @@ def load_config(config_path: Path) -> dict[str, Any]:
 
     with config_path.open("r", encoding="utf-8") as handle:
         config = json.load(handle)
+    if ensure_builtin_excludes(config):
+        config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     validate_config(config)
     return config
+
+
+def ensure_builtin_excludes(config: dict[str, Any]) -> bool:
+    patterns = config.setdefault("exclude_patterns", [])
+    if not isinstance(patterns, list):
+        return False
+
+    changed = False
+    existing = {str(pattern).strip() for pattern in patterns}
+    for pattern in BUILT_IN_EXCLUDE_PATTERNS:
+        if pattern not in existing:
+            patterns.append(pattern)
+            changed = True
+    return changed
 
 
 def validate_config(config: dict[str, Any]) -> None:
@@ -339,10 +356,15 @@ def build_rsync_commands(config: dict[str, Any], disk: dict[str, Any], dry_run: 
     if dry_run and "--dry-run" not in options and "-n" not in options:
         options.append("--dry-run")
 
+    exclude_patterns = list(config.get("exclude_patterns", [])) + list(BUILT_IN_EXCLUDE_PATTERNS)
+
     base_command = [rsync_path, *options]
-    for pattern in config.get("exclude_patterns", []):
-        if str(pattern).strip():
-            base_command.extend(["--exclude", str(pattern)])
+    seen_excludes: set[str] = set()
+    for pattern in exclude_patterns:
+        pattern = str(pattern).strip()
+        if pattern and pattern not in seen_excludes:
+            base_command.extend(["--exclude", pattern])
+            seen_excludes.add(pattern)
 
     commands: list[list[str]] = []
     destination_root = Path(disk["mount_path"]) / disk["destination_subdir"]
