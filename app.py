@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import binascii
 import html
 import json
 import os
@@ -25,8 +26,14 @@ from urllib.parse import parse_qs, urlparse
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = APP_DIR / "config.json"
 DEFAULT_HISTORY_PATH = APP_DIR / "backup_history.json"
+DEFAULT_SOURCE_FINDER_CONFIG_PATH = APP_DIR / "example_icon_sync"
 RSYNC_VERSION = "--version"
 BUILT_IN_EXCLUDE_PATTERNS = ("._*",)
+SOURCE_FINDER_CONFIG_XATTRS = (
+    "com.apple.FinderInfo",
+    "com.apple.icon.folder#S",
+    "com.apple.metadata:_kMDItemUserTags",
+)
 RSYNC_PROGRESS_RE = re.compile(
     r"^\s*(?P<transferred>[\d.,]+[A-Za-z]*)\s+"
     r"(?P<percent>\d+)%\s+"
@@ -101,11 +108,23 @@ class Job:
 
 
 class BackupState:
-    def __init__(self, config_path: Path, history_path: Path | None = None):
+    def __init__(
+        self,
+        config_path: Path,
+        history_path: Path | None = None,
+        source_finder_config_path: Path = DEFAULT_SOURCE_FINDER_CONFIG_PATH,
+        auto_apply_source_finder_config: bool | None = None,
+    ):
         self.config_path = config_path
         self.history_path = history_path or config_path.with_name(DEFAULT_HISTORY_PATH.name)
+        self.source_finder_config_path = source_finder_config_path
+        if auto_apply_source_finder_config is None:
+            auto_apply_source_finder_config = config_path.resolve() == DEFAULT_CONFIG_PATH.resolve()
+        self.auto_apply_source_finder_config = auto_apply_source_finder_config
         self.lock = threading.RLock()
         self.config = load_config(config_path)
+        if self.auto_apply_source_finder_config:
+            apply_source_finder_config(self.config, self.source_finder_config_path)
         self.history = load_history(self.history_path)
         self.jobs: dict[str, Job] = {}
         self.active_job_id: str | None = None
@@ -115,6 +134,8 @@ class BackupState:
         with self.lock:
             self.config = config
             self.config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+            if self.auto_apply_source_finder_config:
+                apply_source_finder_config(self.config, self.source_finder_config_path)
 
     def start_job(self, disk_id: str, dry_run: bool) -> Job:
         with self.lock:
@@ -191,6 +212,84 @@ def job_history_record(job: Job) -> dict[str, Any]:
 
 def format_command(command: list[str]) -> str:
     return " ".join(shlex.quote(part) for part in command)
+
+
+def apply_source_finder_config(config: dict[str, Any], template_path: Path = DEFAULT_SOURCE_FINDER_CONFIG_PATH) -> list[dict[str, str]]:
+    template = read_source_finder_config(template_path)
+    if not template:
+        return []
+
+    results = []
+    for source in config.get("sources", []):
+        source_path = Path(str(source.get("path", ""))).expanduser()
+        if not source_path.is_dir():
+            results.append({"path": str(source_path), "status": "skipped"})
+            continue
+        try:
+            changed = apply_finder_config_to_path(source_path, template)
+            results.append({"path": str(source_path), "status": "updated" if changed else "already-current"})
+        except OSError as exc:
+            results.append({"path": str(source_path), "status": f"failed: {exc}"})
+    return results
+
+
+def read_source_finder_config(template_path: Path) -> dict[str, bytes]:
+    if not template_path.exists():
+        return {}
+
+    values: dict[str, bytes] = {}
+    for attr in SOURCE_FINDER_CONFIG_XATTRS:
+        try:
+            values[attr] = get_finder_xattr(template_path, attr)
+        except OSError:
+            continue
+    return values
+
+
+def apply_finder_config_to_path(path: Path, finder_config: dict[str, bytes]) -> bool:
+    changed = False
+    for attr, value in finder_config.items():
+        try:
+            current = get_finder_xattr(path, attr)
+        except OSError:
+            current = None
+        if current != value:
+            set_finder_xattr(path, attr, value)
+            changed = True
+    return changed
+
+
+def get_finder_xattr(path: Path, attr: str) -> bytes:
+    if hasattr(os, "getxattr"):
+        return os.getxattr(path, attr)  # type: ignore[attr-defined]
+
+    result = subprocess.run(
+        ["/usr/bin/xattr", "-px", attr, str(path)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise OSError(result.stderr.strip() or f"Unable to read xattr {attr}")
+    hex_value = "".join(result.stdout.split())
+    return binascii.unhexlify(hex_value)
+
+
+def set_finder_xattr(path: Path, attr: str, value: bytes) -> None:
+    if hasattr(os, "setxattr"):
+        os.setxattr(path, attr, value)  # type: ignore[attr-defined]
+        return
+
+    result = subprocess.run(
+        ["/usr/bin/xattr", "-wx", attr, binascii.hexlify(value).decode("ascii"), str(path)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise OSError(result.stderr.strip() or f"Unable to write xattr {attr}")
 
 
 def item_progress_percent(job: Job) -> int | None:
