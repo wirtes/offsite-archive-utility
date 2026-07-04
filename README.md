@@ -27,9 +27,9 @@ The default run button starts in dry-run mode. Uncheck **Dry run** when you are 
 ## Config Fields
 
 - `rsync_path`: Path to the `rsync` executable, usually `/usr/bin/rsync`.
-- `rsync_options`: Arguments passed to every rsync run.
+- `rsync_options`: Arguments passed to every rsync run. Keep `--delete` out of this global list; use the per-source Delete checkbox instead.
 - `exclude_patterns`: Patterns passed as `--exclude`.
-- `sources`: Directories or mounted volumes to copy. Each source `id` is used as the subdirectory on each backup disk.
+- `sources`: Directories or mounted volumes to copy. Each source `id` is used as the subdirectory on each backup disk. Set `delete` to `true` only when rsync should delete destination files for that source.
 - `backup_disks`: Rotating disks with mount paths and destination subdirectories. Disk `id` is the stable internal key; disk `name` is the human-friendly display name.
 
 ## Notes
@@ -39,3 +39,4 @@ The default run button starts in dry-run mode. Uncheck **Dry run** when you are 
 - The app binds to `0.0.0.0` by default, so it is reachable from other devices on your local network if macOS Firewall allows incoming connections.
 - To restrict it to the backup Mac only, run `python3 app.py --host 127.0.0.1`.
 - Only one backup job runs at a time.
+- The per-source Delete checkbox enables `--delete` only for that source. It defaults off for new sources.

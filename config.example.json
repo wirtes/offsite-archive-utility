@@ -2,7 +2,6 @@
   "rsync_path": "/usr/bin/rsync",
   "rsync_options": [
     "-a",
-    "--delete",
     "--progress",
     "--human-readable"
   ],
@@ -22,7 +21,8 @@
     {
       "id": "documents",
       "path": "/Users/you/Documents",
-      "enabled": true
+      "enabled": true,
+      "delete": false
     }
   ],
   "backup_disks": [

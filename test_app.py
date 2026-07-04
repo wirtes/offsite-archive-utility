@@ -61,8 +61,8 @@ class RsyncCommandTests(unittest.TestCase):
             loaded = load_config(config_path)
             saved = json.loads(config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(["-a", "-v", "--delete"], loaded["rsync_options"])
-            self.assertEqual(["-a", "-v", "--delete"], saved["rsync_options"])
+            self.assertEqual(["-a", "-v"], loaded["rsync_options"])
+            self.assertEqual(["-a", "-v"], saved["rsync_options"])
 
     def test_sources_table_labels_id_as_backup_subdirectory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -72,8 +72,15 @@ class RsyncCommandTests(unittest.TestCase):
 
             self.assertIn("Subdirectory on backup disk", html)
             self.assertIn('placeholder="backup-subdirectory"', html)
+            self.assertIn("<th>Delete</th>", html)
+            self.assertIn('name="source_delete_0"', html)
             self.assertNotIn("<th>Label</th>", html)
             self.assertIn("ID is the stable internal key", html)
+
+    def test_source_delete_defaults_to_off(self) -> None:
+        config = default_config()
+
+        self.assertFalse(config["sources"][0]["delete"])
 
     def test_render_page_shows_only_one_previous_job_when_idle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -164,6 +171,26 @@ class RsyncCommandTests(unittest.TestCase):
             self.assertEqual(len(commands), 1)
             self.assertIn("--dry-run", commands[0])
             self.assertFalse((mount / "Backups" / "This-Mac" / "source-one").exists())
+
+    def test_delete_flag_is_only_added_for_sources_that_enable_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            mount = root / "BackupDisk"
+            source.mkdir()
+            mount.mkdir()
+            config = config_for(source)
+            config["rsync_options"] = ["-a", "--delete"]
+
+            command = build_rsync_commands(config, disk_for(mount), dry_run=True)[0]
+
+            self.assertNotIn("--delete", command)
+
+            config["sources"][0]["delete"] = True
+            command = build_rsync_commands(config, disk_for(mount), dry_run=True)[0]
+
+            self.assertIn("--delete", command)
+            self.assertLess(command.index("--delete"), len(command) - 2)
 
     def test_live_run_creates_destination_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -295,6 +322,7 @@ def config_for(source: Path) -> dict:
                 "id": "source-one",
                 "path": str(source),
                 "enabled": True,
+                "delete": False,
             }
         ],
         "backup_disks": [],

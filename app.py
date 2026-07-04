@@ -205,7 +205,7 @@ def is_progress_item_line(line: str) -> bool:
 def default_config() -> dict[str, Any]:
     return {
         "rsync_path": "/usr/bin/rsync",
-        "rsync_options": ["-a", "--delete", "--progress", "--human-readable"],
+        "rsync_options": ["-a", "--progress", "--human-readable"],
         "exclude_patterns": [
             ".DS_Store",
             "._*",
@@ -223,6 +223,7 @@ def default_config() -> dict[str, Any]:
                 "id": "documents",
                 "path": str(Path.home() / "Documents"),
                 "enabled": True,
+                "delete": False,
             }
         ],
         "backup_disks": [
@@ -265,7 +266,8 @@ def load_config(config_path: Path) -> dict[str, Any]:
 def normalize_appledouble_skip_config(config: dict[str, Any]) -> bool:
     excludes_changed = ensure_builtin_excludes(config)
     options_changed = remove_appledouble_generating_options_from_config(config)
-    return excludes_changed or options_changed
+    delete_changed = remove_global_delete_option_from_config(config)
+    return excludes_changed or options_changed or delete_changed
 
 
 def ensure_builtin_excludes(config: dict[str, Any]) -> bool:
@@ -308,6 +310,19 @@ def remove_appledouble_generating_options(options: list[Any]) -> list[str]:
             continue
         cleaned.append(option)
     return cleaned
+
+
+def remove_global_delete_option_from_config(config: dict[str, Any]) -> bool:
+    options = config.get("rsync_options", [])
+    if not isinstance(options, list):
+        return False
+
+    cleaned_options = [str(option) for option in options if str(option) != "--delete"]
+    if cleaned_options == options:
+        return False
+
+    config["rsync_options"] = cleaned_options
+    return True
 
 
 def validate_config(config: dict[str, Any]) -> None:
@@ -370,6 +385,7 @@ def source_status(source: dict[str, Any]) -> dict[str, Any]:
         **source,
         "exists": path.exists(),
         "enabled": bool(source.get("enabled", True)),
+        "delete": bool(source.get("delete", False)),
     }
 
 
@@ -386,7 +402,7 @@ def disk_status(disk: dict[str, Any]) -> dict[str, Any]:
 
 def build_rsync_commands(config: dict[str, Any], disk: dict[str, Any], dry_run: bool) -> list[list[str]]:
     rsync_path = str(config.get("rsync_path") or "/usr/bin/rsync")
-    options = remove_appledouble_generating_options(config.get("rsync_options", []))
+    options = [option for option in remove_appledouble_generating_options(config.get("rsync_options", [])) if option != "--delete"]
     if dry_run and "--dry-run" not in options and "-n" not in options:
         options.append("--dry-run")
 
@@ -411,7 +427,10 @@ def build_rsync_commands(config: dict[str, Any], disk: dict[str, Any], dry_run: 
         source_destination = destination_root / source["id"]
         if not dry_run:
             source_destination.mkdir(parents=True, exist_ok=True)
-        commands.append([*base_command, str(path) + "/", str(source_destination) + "/"])
+        source_command = [*base_command]
+        if source.get("delete", False):
+            source_command.append("--delete")
+        commands.append([*source_command, str(path) + "/", str(source_destination) + "/"])
     if not commands:
         raise ValueError("No enabled sources are configured.")
     return commands
@@ -522,6 +541,7 @@ def parse_source_rows(data: dict[str, list[str]]) -> list[dict[str, Any]]:
             "id": ids[index].strip(),
             "path": data.get("source_path", [""] * len(ids))[index].strip(),
             "enabled": data.get(f"source_enabled_{index}", ["off"])[0] == "on",
+            "delete": data.get(f"source_delete_{index}", ["off"])[0] == "on",
         }
         if any(str(row.get(field_name, "")).strip() for field_name in ("id", "path")):
             rows.append(row)
@@ -789,7 +809,7 @@ def render_page(state: BackupState, error: str = "") -> str:
           </div>
           <div class="table-wrap">
             <table id="sources-table">
-              <thead><tr><th>Enabled</th><th>Subdirectory on backup disk</th><th>Path</th><th></th></tr></thead>
+              <thead><tr><th>Enabled</th><th>Delete</th><th>Subdirectory on backup disk</th><th>Path</th><th></th></tr></thead>
               <tbody>{source_rows}</tbody>
             </table>
           </div>
@@ -824,9 +844,11 @@ def render_page(state: BackupState, error: str = "") -> str:
 
 def render_source_row(source: dict[str, Any], index: int) -> str:
     checked = "checked" if source.get("enabled", True) else ""
+    delete_checked = "checked" if source.get("delete", False) else ""
     badge = "<span class='ok'>Found</span>" if source["exists"] else "<span class='bad'>Missing</span>"
     return f"""<tr>
-  <td><input type="checkbox" name="source_enabled_{index}" {checked}></td>
+  <td><input type="checkbox" name="source_enabled_{index}" data-source-enabled {checked}></td>
+  <td><input type="checkbox" name="source_delete_{index}" data-source-delete {delete_checked}></td>
   <td><input name="source_id" value="{escape(source["id"])}" placeholder="backup-subdirectory"></td>
   <td><input name="source_path" value="{escape(source["path"])}"><div class="row-note">{badge}</div></td>
   <td><button type="button" class="icon" data-remove-row>Remove</button></td>
@@ -1167,7 +1189,8 @@ JS = """
 function rowHtml(type) {
   if (type === "source") {
     return `<tr>
-      <td><input type="checkbox" name="source_enabled" checked></td>
+      <td><input type="checkbox" name="source_enabled" data-source-enabled checked></td>
+      <td><input type="checkbox" name="source_delete" data-source-delete></td>
       <td><input name="source_id" value="" placeholder="backup-subdirectory"></td>
       <td><input name="source_path" value=""></td>
       <td><button type="button" class="icon" data-remove-row>Remove</button></td>
@@ -1201,8 +1224,10 @@ document.addEventListener("submit", () => reindexSourceCheckboxes());
 
 function reindexSourceCheckboxes() {
   document.querySelectorAll("#sources-table tbody tr").forEach((row, index) => {
-    const checkbox = row.querySelector('input[type="checkbox"]');
-    if (checkbox) checkbox.name = `source_enabled_${index}`;
+    const enabled = row.querySelector("[data-source-enabled]");
+    const deleteFiles = row.querySelector("[data-source-delete]");
+    if (enabled) enabled.name = `source_enabled_${index}`;
+    if (deleteFiles) deleteFiles.name = `source_delete_${index}`;
   });
 }
 
