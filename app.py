@@ -123,8 +123,9 @@ class BackupState:
         self.auto_apply_source_finder_config = auto_apply_source_finder_config
         self.lock = threading.RLock()
         self.config = load_config(config_path)
+        self.source_finder_config_results: list[dict[str, str]] = []
         if self.auto_apply_source_finder_config:
-            apply_source_finder_config(self.config, self.source_finder_config_path)
+            self.source_finder_config_results = apply_source_finder_config(self.config, self.source_finder_config_path)
         self.history = load_history(self.history_path)
         self.jobs: dict[str, Job] = {}
         self.active_job_id: str | None = None
@@ -135,7 +136,7 @@ class BackupState:
             self.config = config
             self.config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
             if self.auto_apply_source_finder_config:
-                apply_source_finder_config(self.config, self.source_finder_config_path)
+                self.source_finder_config_results = apply_source_finder_config(self.config, self.source_finder_config_path)
 
     def start_job(self, disk_id: str, dry_run: bool) -> Job:
         with self.lock:
@@ -731,6 +732,13 @@ class BackupRequestHandler(BaseHTTPRequestHandler):
                 self.redirect("/?saved=1")
             except (ValueError, json.JSONDecodeError) as exc:
                 self.send_html(render_page(self.state, error=str(exc)), HTTPStatus.BAD_REQUEST)
+        elif parsed.path == "/apply-source-finder-config":
+            try:
+                config = parse_config_form(body)
+                self.state.save_config(config)
+                self.redirect("/?source-icons=1")
+            except (ValueError, json.JSONDecodeError) as exc:
+                self.send_html(render_page(self.state, error=str(exc)), HTTPStatus.BAD_REQUEST)
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -874,12 +882,39 @@ def render_backup_timeline(timeline: dict[str, Any]) -> str:
 </div>"""
 
 
+def render_source_finder_config_results(results: list[dict[str, str]]) -> str:
+    if not results:
+        return """<div class="finder-config-results">
+  <p>Source icons: not applied in this browser session yet.</p>
+  <span class="muted">They are applied when the app starts and whenever configuration is saved.</span>
+</div>"""
+
+    items = []
+    for result in results:
+        status = result.get("status", "")
+        if status in {"updated", "already-current"}:
+            status_class = "ok"
+        elif status.startswith("failed"):
+            status_class = "bad"
+        else:
+            status_class = "muted"
+        items.append(
+            f"""<li><span class="{status_class}">{escape(status)}</span><code>{escape(result.get("path", ""))}</code></li>"""
+        )
+
+    return f"""<div class="finder-config-results">
+  <p>Source icons: last apply result</p>
+  <ul>{''.join(items)}</ul>
+</div>"""
+
+
 def render_page(state: BackupState, error: str = "") -> str:
     with state.lock:
         config = json.loads(json.dumps(state.config))
         active_job = state.jobs.get(state.active_job_id) if state.active_job_id else None
         jobs = visible_activity_jobs(state.jobs.values(), active_job)
         timeline = backup_timeline(timeline_history(state), config["backup_disks"])
+        source_finder_config_results = list(state.source_finder_config_results)
 
     sources = [source_status(source) for source in config["sources"]]
     disks = [disk_status(disk) for disk in config["backup_disks"]]
@@ -888,6 +923,7 @@ def render_page(state: BackupState, error: str = "") -> str:
     disk_cards = "\n".join(render_disk_card(disk, bool(active_job)) for disk in disks)
     job_cards = "\n".join(render_job_card(job) for job in jobs) or "<p class='muted'>No backup jobs yet.</p>"
     timeline_html = render_backup_timeline(timeline)
+    source_finder_config_html = render_source_finder_config_results(source_finder_config_results)
     active_job_id = active_job.id if active_job else ""
 
     return f"""<!doctype html>
@@ -957,6 +993,7 @@ def render_page(state: BackupState, error: str = "") -> str:
             <h3>Sources</h3>
             <p>Read only. These locations are scanned and copied from; rsync will not write changes here.</p>
           </div>
+          {source_finder_config_html}
           <div class="table-wrap">
             <table id="sources-table">
               <thead><tr><th>Enabled</th><th>Delete</th><th>Subdirectory on backup disk</th><th>Path</th><th></th></tr></thead>
@@ -964,6 +1001,7 @@ def render_page(state: BackupState, error: str = "") -> str:
             </table>
           </div>
           <button type="button" class="secondary" data-add-row="source">Add source</button>
+          <button type="submit" class="secondary" formaction="/apply-source-finder-config" formmethod="post">Save and apply source icons</button>
         </div>
 
         <div class="config-zone disks-zone">
@@ -1224,6 +1262,21 @@ th { color: var(--muted); font-size: 13px; }
 .disks-zone { background: #fff1ef; border-color: #efb8b0; }
 .disks-zone .zone-heading p { color: #a5362b; }
 .config-zone .secondary { margin-top: 12px; }
+.finder-config-results {
+  background: rgba(255, 255, 255, 0.72); border: 1px solid rgba(23, 96, 58, 0.18);
+  border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;
+}
+.finder-config-results p { margin-bottom: 6px; font-size: 13px; font-weight: 750; }
+.finder-config-results ul { list-style: none; margin: 0; padding: 0; }
+.finder-config-results li {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 5px 0; border-top: 1px solid rgba(23, 96, 58, 0.10);
+}
+.finder-config-results li:first-child { border-top: 0; }
+.finder-config-results code {
+  display: inline; margin: 0; padding: 0; background: transparent;
+  overflow-wrap: anywhere; font-size: 12px;
+}
 .job { border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 12px; }
 .job-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .job-head span { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }

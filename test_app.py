@@ -128,6 +128,21 @@ class RsyncCommandTests(unittest.TestCase):
 
             self.assertEqual(get_finder_xattr(template, SOURCE_FINDER_CONFIG_XATTRS[1]), get_finder_xattr(source_two, SOURCE_FINDER_CONFIG_XATTRS[1]))
 
+    def test_render_page_shows_source_finder_config_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = BackupState(Path(tmp) / "config.json")
+            state.source_finder_config_results = [
+                {"path": "/Volumes/SourceOne", "status": "updated"},
+                {"path": "/Volumes/SourceTwo", "status": "failed: Operation not permitted"},
+            ]
+
+            html = render_page(state)
+
+            self.assertIn("Source icons: last apply result", html)
+            self.assertIn("/Volumes/SourceOne", html)
+            self.assertIn("failed: Operation not permitted", html)
+            self.assertIn("Save and apply source icons", html)
+
     def test_render_page_shows_only_one_previous_job_when_idle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = BackupState(Path(tmp) / "config.json")
