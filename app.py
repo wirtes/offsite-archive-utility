@@ -207,6 +207,7 @@ def default_config() -> dict[str, Any]:
         "rsync_options": ["-aE", "--delete", "--progress", "--human-readable"],
         "exclude_patterns": [
             ".DS_Store",
+            "._*",
             ".Trash/",
             ".Trashes/",
             ".Spotlight-V100/",

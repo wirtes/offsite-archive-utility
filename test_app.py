@@ -3,10 +3,13 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from app import BackupState, Job, build_rsync_commands, render_disk_card, render_job_card, render_page, run_job, update_job_progress_from_line
+from app import BackupState, Job, build_rsync_commands, default_config, render_disk_card, render_job_card, render_page, run_job, update_job_progress_from_line
 
 
 class RsyncCommandTests(unittest.TestCase):
+    def test_default_config_excludes_appledouble_files(self) -> None:
+        self.assertIn("._*", default_config()["exclude_patterns"])
+
     def test_sources_table_labels_id_as_backup_subdirectory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = BackupState(Path(tmp) / "config.json")

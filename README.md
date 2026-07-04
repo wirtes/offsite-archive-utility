@@ -35,7 +35,7 @@ The default run button starts in dry-run mode. Uncheck **Dry run** when you are 
 ## Notes
 
 - Keep disk `mount_path` values aligned with the volume names macOS shows under `/Volumes`.
-- When backing up an entire mounted volume, exclude macOS metadata folders such as `.Spotlight-V100/`, `.Trashes/`, `.DocumentRevisions-V100/`, `.TemporaryItems/`, and `.fseventsd/`. They are system-managed and often produce permission warnings.
+- When backing up an entire mounted volume, exclude macOS metadata folders such as `.Spotlight-V100/`, `.Trashes/`, `.DocumentRevisions-V100/`, `.TemporaryItems/`, and `.fseventsd/`, plus AppleDouble sidecar files like `._*`. They are system-managed and often produce permission warnings.
 - The app binds to `0.0.0.0` by default, so it is reachable from other devices on your local network if macOS Firewall allows incoming connections.
 - To restrict it to the backup Mac only, run `python3 app.py --host 127.0.0.1`.
 - Only one backup job runs at a time.
