@@ -128,6 +128,16 @@ class RsyncCommandTests(unittest.TestCase):
 
             self.assertEqual(get_finder_xattr(template, SOURCE_FINDER_CONFIG_XATTRS[1]), get_finder_xattr(source_two, SOURCE_FINDER_CONFIG_XATTRS[1]))
 
+    def test_missing_finder_config_template_returns_visible_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source"
+            source.mkdir()
+
+            results = apply_source_finder_config(config_for(source), Path(tmp) / "missing-template")
+
+            self.assertEqual(1, len(results))
+            self.assertIn("failed: source icon template", results[0]["status"])
+
     def test_render_page_shows_source_finder_config_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = BackupState(Path(tmp) / "config.json")

@@ -118,9 +118,7 @@ class BackupState:
         self.config_path = config_path
         self.history_path = history_path or config_path.with_name(DEFAULT_HISTORY_PATH.name)
         self.source_finder_config_path = source_finder_config_path
-        if auto_apply_source_finder_config is None:
-            auto_apply_source_finder_config = config_path.resolve() == DEFAULT_CONFIG_PATH.resolve()
-        self.auto_apply_source_finder_config = auto_apply_source_finder_config
+        self.auto_apply_source_finder_config = True if auto_apply_source_finder_config is None else auto_apply_source_finder_config
         self.lock = threading.RLock()
         self.config = load_config(config_path)
         self.source_finder_config_results: list[dict[str, str]] = []
@@ -218,7 +216,7 @@ def format_command(command: list[str]) -> str:
 def apply_source_finder_config(config: dict[str, Any], template_path: Path = DEFAULT_SOURCE_FINDER_CONFIG_PATH) -> list[dict[str, str]]:
     template = read_source_finder_config(template_path)
     if not template:
-        return []
+        return [{"path": str(template_path), "status": "failed: source icon template not found or has no Finder metadata"}]
 
     results = []
     for source in config.get("sources", []):
@@ -230,8 +228,15 @@ def apply_source_finder_config(config: dict[str, Any], template_path: Path = DEF
             changed = apply_finder_config_to_path(source_path, template)
             results.append({"path": str(source_path), "status": "updated" if changed else "already-current"})
         except OSError as exc:
-            results.append({"path": str(source_path), "status": f"failed: {exc}"})
+            results.append({"path": str(source_path), "status": f"failed: {friendly_finder_error(exc)}"})
     return results
+
+
+def friendly_finder_error(exc: OSError) -> str:
+    message = str(exc)
+    if getattr(exc, "errno", None) == 1 or "Operation not permitted" in message:
+        return "permission denied by macOS. Give Terminal full disk access, then restart the launcher."
+    return message
 
 
 def read_source_finder_config(template_path: Path) -> dict[str, bytes]:
@@ -906,6 +911,12 @@ def render_source_finder_config_results(results: list[dict[str, str]]) -> str:
   <p>Source icons: last apply result</p>
   <ul>{''.join(items)}</ul>
 </div>"""
+
+
+def format_source_finder_config_results(results: list[dict[str, str]]) -> str:
+    if not results:
+        return "Source icon metadata was not applied."
+    return "; ".join(f"{result.get('status', 'unknown')} {result.get('path', '')}" for result in results)
 
 
 def render_page(state: BackupState, error: str = "") -> str:
@@ -1678,6 +1689,8 @@ def main() -> None:
     server = ThreadingHTTPServer((args.host, args.port), BackupRequestHandler)
     print(f"Offsite Archive Utility running at http://{args.host}:{args.port}")
     print(f"Config: {state.config_path}")
+    print(f"Source icon template: {state.source_finder_config_path}")
+    print(f"Source icon apply: {format_source_finder_config_results(state.source_finder_config_results)}")
     server.serve_forever()
 
 
