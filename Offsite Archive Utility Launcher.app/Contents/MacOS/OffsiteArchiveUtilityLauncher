@@ -1,0 +1,18 @@
+#!/bin/zsh
+set -u
+
+APP_DIR="/Users/wirtes/Code/Codex Projects/offsite-archive-utility"
+LAUNCHER="${APP_DIR}/Launch Offsite Archive Utility.command"
+
+if [ ! -x "${LAUNCHER}" ]; then
+  osascript -e 'display alert "Offsite Archive Utility launcher not found" message "Could not find the launcher script. If the repo moved, update APP_DIR inside this app bundle." as critical'
+  exit 1
+fi
+
+terminal_command="cd /Users/wirtes/Code/Codex\\ Projects/offsite-archive-utility && ./Launch\\ Offsite\\ Archive\\ Utility.command"
+
+osascript \
+  -e 'tell application "Terminal"' \
+  -e 'activate' \
+  -e "do script \"${terminal_command}\"" \
+  -e 'end tell'
