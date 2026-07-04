@@ -18,7 +18,7 @@ from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import parse_qs, urlparse
 
 
@@ -205,7 +205,7 @@ def is_progress_item_line(line: str) -> bool:
 def default_config() -> dict[str, Any]:
     return {
         "rsync_path": "/usr/bin/rsync",
-        "rsync_options": ["-aE", "--delete", "--progress", "--human-readable"],
+        "rsync_options": ["-a", "--delete", "--progress", "--human-readable"],
         "exclude_patterns": [
             ".DS_Store",
             "._*",
@@ -256,10 +256,16 @@ def load_config(config_path: Path) -> dict[str, Any]:
 
     with config_path.open("r", encoding="utf-8") as handle:
         config = json.load(handle)
-    if ensure_builtin_excludes(config):
+    if normalize_appledouble_skip_config(config):
         config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     validate_config(config)
     return config
+
+
+def normalize_appledouble_skip_config(config: dict[str, Any]) -> bool:
+    excludes_changed = ensure_builtin_excludes(config)
+    options_changed = remove_appledouble_generating_options_from_config(config)
+    return excludes_changed or options_changed
 
 
 def ensure_builtin_excludes(config: dict[str, Any]) -> bool:
@@ -274,6 +280,34 @@ def ensure_builtin_excludes(config: dict[str, Any]) -> bool:
             patterns.append(pattern)
             changed = True
     return changed
+
+
+def remove_appledouble_generating_options_from_config(config: dict[str, Any]) -> bool:
+    options = config.get("rsync_options", [])
+    if not isinstance(options, list):
+        return False
+
+    cleaned_options = remove_appledouble_generating_options(options)
+    if cleaned_options == options:
+        return False
+
+    config["rsync_options"] = cleaned_options
+    return True
+
+
+def remove_appledouble_generating_options(options: list[Any]) -> list[str]:
+    cleaned: list[str] = []
+    for option in options:
+        option = str(option)
+        if option == "-E":
+            continue
+        if option.startswith("-") and not option.startswith("--") and "E" in option[1:]:
+            stripped_flags = option[1:].replace("E", "")
+            if stripped_flags:
+                cleaned.append("-" + stripped_flags)
+            continue
+        cleaned.append(option)
+    return cleaned
 
 
 def validate_config(config: dict[str, Any]) -> None:
@@ -352,7 +386,7 @@ def disk_status(disk: dict[str, Any]) -> dict[str, Any]:
 
 def build_rsync_commands(config: dict[str, Any], disk: dict[str, Any], dry_run: bool) -> list[list[str]]:
     rsync_path = str(config.get("rsync_path") or "/usr/bin/rsync")
-    options = [str(option) for option in config.get("rsync_options", [])]
+    options = remove_appledouble_generating_options(config.get("rsync_options", []))
     if dry_run and "--dry-run" not in options and "-n" not in options:
         options.append("--dry-run")
 
@@ -448,6 +482,7 @@ def parse_config_form(body: bytes) -> dict[str, Any]:
     config["exclude_patterns"] = split_nonempty_lines(data.get("exclude_patterns", [""])[0])
     config["sources"] = parse_source_rows(data)
     config["backup_disks"] = parse_rows(data, "disk", ("id", "name", "mount_path", "destination_subdir"))
+    normalize_appledouble_skip_config(config)
     return config
 
 
@@ -577,28 +612,112 @@ class BackupRequestHandler(BaseHTTPRequestHandler):
 def public_state(state: BackupState) -> dict[str, Any]:
     with state.lock:
         config = state.config
-        jobs = [job.to_dict() for job in state.jobs.values()]
         active_job = state.jobs.get(state.active_job_id) if state.active_job_id else None
+        jobs = [job.to_dict() for job in visible_activity_jobs(state.jobs.values(), active_job)]
+        timeline = backup_timeline(state.jobs.values(), config["backup_disks"])
     return {
         "sources": [source_status(source) for source in config["sources"]],
         "backup_disks": [disk_status(disk) for disk in config["backup_disks"]],
-        "jobs": sorted(jobs, key=lambda item: item["started_at"], reverse=True),
+        "jobs": jobs,
         "active_job": active_job.to_dict() if active_job else None,
+        "timeline": timeline,
     }
+
+
+def visible_activity_jobs(jobs: Iterable[Job], active_job: Job | None) -> list[Job]:
+    sorted_jobs = sorted(jobs, key=lambda job: job.started_at, reverse=True)
+    if not active_job:
+        return sorted_jobs[:1]
+
+    visible = [active_job]
+    for job in sorted_jobs:
+        if job.id != active_job.id:
+            visible.append(job)
+            break
+    return visible
+
+
+def backup_timeline(jobs: Iterable[Job], disks: list[dict[str, Any]]) -> dict[str, Any]:
+    all_jobs = sorted(jobs, key=lambda job: job.started_at)
+    if not all_jobs:
+        return {"rows": [], "start_label": "", "end_label": ""}
+
+    start = all_jobs[0].started_at
+    end = all_jobs[-1].started_at
+    span = max(end - start, 1)
+    disk_names = {disk["id"]: disk["name"] for disk in disks}
+    for job in all_jobs:
+        disk_names.setdefault(job.disk_id, job.disk_name)
+
+    rows = []
+    for disk_id, disk_name in disk_names.items():
+        events = []
+        for job in all_jobs:
+            if job.disk_id != disk_id:
+                continue
+            events.append(
+                {
+                    "id": job.id,
+                    "label": timestamp(job.started_at),
+                    "status": job.status,
+                    "dry_run": job.dry_run,
+                    "position": round(((job.started_at - start) / span) * 100, 2) if len(all_jobs) > 1 else 50,
+                }
+            )
+        rows.append({"disk_id": disk_id, "disk_name": disk_name, "events": events})
+
+    return {
+        "rows": rows,
+        "start_label": timestamp(start),
+        "end_label": timestamp(end),
+    }
+
+
+def render_backup_timeline(timeline: dict[str, Any]) -> str:
+    rows = timeline.get("rows", [])
+    if not any(row.get("events") for row in rows):
+        return """<div id="backup-timeline" class="timeline">
+  <div class="timeline-head"><h3>Backup timeline</h3></div>
+  <p class="muted">No backup history yet.</p>
+</div>"""
+
+    rendered_rows = []
+    for row in rows:
+        events = "".join(
+            f"""<span class="timeline-dot {escape(event["status"])}" style="left: {escape(event["position"])}%" title="{escape(event["label"])} · {escape(event["status"])}{' · dry run' if event["dry_run"] else ''}"></span>"""
+            for event in row.get("events", [])
+        )
+        empty = "<span class='timeline-empty'>No runs yet</span>" if not row.get("events") else ""
+        rendered_rows.append(
+            f"""<div class="timeline-row">
+  <div class="timeline-label">{escape(row["disk_name"])}</div>
+  <div class="timeline-track">{events}{empty}</div>
+</div>"""
+        )
+
+    return f"""<div id="backup-timeline" class="timeline">
+  <div class="timeline-head">
+    <h3>Backup timeline</h3>
+    <span>{escape(timeline.get("start_label", ""))} to {escape(timeline.get("end_label", ""))}</span>
+  </div>
+  {''.join(rendered_rows)}
+</div>"""
 
 
 def render_page(state: BackupState, error: str = "") -> str:
     with state.lock:
         config = json.loads(json.dumps(state.config))
-        jobs = sorted(state.jobs.values(), key=lambda job: job.started_at, reverse=True)
         active_job = state.jobs.get(state.active_job_id) if state.active_job_id else None
+        jobs = visible_activity_jobs(state.jobs.values(), active_job)
+        timeline = backup_timeline(state.jobs.values(), config["backup_disks"])
 
     sources = [source_status(source) for source in config["sources"]]
     disks = [disk_status(disk) for disk in config["backup_disks"]]
     source_rows = "\n".join(render_source_row(source, index) for index, source in enumerate(sources))
     disk_rows = "\n".join(render_disk_row(disk) for disk in disks)
     disk_cards = "\n".join(render_disk_card(disk, bool(active_job)) for disk in disks)
-    job_cards = "\n".join(render_job_card(job) for job in jobs[:10]) or "<p class='muted'>No backup jobs yet.</p>"
+    job_cards = "\n".join(render_job_card(job) for job in jobs) or "<p class='muted'>No backup jobs yet.</p>"
+    timeline_html = render_backup_timeline(timeline)
     active_job_id = active_job.id if active_job else ""
 
     return f"""<!doctype html>
@@ -639,6 +758,7 @@ def render_page(state: BackupState, error: str = "") -> str:
         <span id="refresh-status" class="muted">{escape("Backup running" if active_job else "Idle")}</span>
       </div>
       <div id="jobs">{job_cards}</div>
+      {timeline_html}
     </section>
 
     <section class="panel">
@@ -977,9 +1097,46 @@ pre {
   list-style-position: inside;
 }
 .log-details pre { border-radius: 0; }
+.timeline {
+  border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px;
+}
+.timeline-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  margin-bottom: 12px;
+}
+.timeline-head h3 { margin: 0; font-size: 16px; }
+.timeline-head span { color: var(--muted); font-size: 13px; }
+.timeline-row {
+  display: grid; grid-template-columns: minmax(140px, 220px) 1fr; gap: 14px;
+  align-items: center; margin-bottom: 12px;
+}
+.timeline-label {
+  color: #263442; font-weight: 700; overflow-wrap: anywhere;
+}
+.timeline-track {
+  position: relative; height: 18px; border-radius: 999px; background: #edf2f5;
+  box-shadow: inset 0 0 0 1px rgba(22, 35, 45, 0.06);
+}
+.timeline-track::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 8px; height: 2px;
+  background: #cbd6df;
+}
+.timeline-dot {
+  position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%;
+  transform: translate(-50%, -50%); background: var(--accent); border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(22, 35, 45, 0.18);
+}
+.timeline-dot.running { background: #2b5872; }
+.timeline-dot.completed { background: var(--ok); }
+.timeline-dot.failed { background: var(--danger); }
+.timeline-empty {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  color: var(--muted); font-size: 12px;
+}
 @media (max-width: 720px) {
   header, .section-heading, .job-head, .zone-heading, .heading-actions { align-items: flex-start; flex-direction: column; }
   .disk-card form { align-items: stretch; flex-direction: column; }
+  .timeline-head, .timeline-row { display: flex; align-items: stretch; flex-direction: column; }
   button { width: 100%; }
 }
 """
@@ -1058,6 +1215,7 @@ async function refreshState({ manual = false } = {}) {
   isBackupRunning = Boolean(active);
   updateDiskCards(state);
   renderJobs(state.jobs, activityState);
+  renderTimeline(state.timeline);
   syncRefreshSelectors();
   document.querySelector("#refresh-status").textContent = active
     ? `Running ${active.disk_name}`
@@ -1086,6 +1244,29 @@ function renderJobs(jobs, activityState = captureActivityState()) {
   document.querySelector("#jobs").innerHTML = html;
   restoreActivityState(activityState);
   syncRefreshSelectors();
+}
+
+function renderTimeline(timeline) {
+  const wrap = document.querySelector("#backup-timeline");
+  if (!wrap) return;
+  const rows = (timeline && timeline.rows) || [];
+  if (!rows.some((row) => row.events && row.events.length)) {
+    wrap.innerHTML = `<div class="timeline-head"><h3>Backup timeline</h3></div><p class="muted">No backup history yet.</p>`;
+    return;
+  }
+  const dateRange = `${escapeHtml(timeline.start_label || "")} to ${escapeHtml(timeline.end_label || "")}`;
+  const rowHtml = rows.map((row) => {
+    const events = (row.events || []).map((event) => {
+      const title = `${event.label} · ${event.status}${event.dry_run ? " · dry run" : ""}`;
+      return `<span class="timeline-dot ${escapeHtml(event.status)}" style="left: ${Number(event.position) || 0}%" title="${escapeHtml(title)}"></span>`;
+    }).join("");
+    const empty = events ? "" : "<span class='timeline-empty'>No runs yet</span>";
+    return `<div class="timeline-row">
+      <div class="timeline-label">${escapeHtml(row.disk_name)}</div>
+      <div class="timeline-track">${events}${empty}</div>
+    </div>`;
+  }).join("");
+  wrap.innerHTML = `<div class="timeline-head"><h3>Backup timeline</h3><span>${dateRange}</span></div>${rowHtml}`;
 }
 
 function captureActivityState() {

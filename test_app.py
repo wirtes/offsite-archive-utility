@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from app import BackupState, Job, build_rsync_commands, default_config, load_config, render_disk_card, render_job_card, render_page, run_job, update_job_progress_from_line
+from app import BackupState, Job, build_rsync_commands, default_config, load_config, public_state, render_disk_card, render_job_card, render_page, run_job, update_job_progress_from_line
 
 
 class RsyncCommandTests(unittest.TestCase):
@@ -24,6 +24,20 @@ class RsyncCommandTests(unittest.TestCase):
             self.assertIn("--exclude", command)
             self.assertIn("._*", command)
 
+    def test_rsync_command_removes_appledouble_generating_e_option(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            mount = root / "BackupDisk"
+            source.mkdir()
+            mount.mkdir()
+
+            command = build_rsync_commands(config_for(source), disk_for(mount), dry_run=True)[0]
+
+            self.assertIn("-a", command)
+            self.assertNotIn("-aE", command)
+            self.assertNotIn("-E", command)
+
     def test_load_config_adds_builtin_excludes_to_existing_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.json"
@@ -37,6 +51,19 @@ class RsyncCommandTests(unittest.TestCase):
             self.assertIn("._*", loaded["exclude_patterns"])
             self.assertIn("._*", saved["exclude_patterns"])
 
+    def test_load_config_removes_appledouble_generating_e_option(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config = config_for(Path(tmp) / "source")
+            config["rsync_options"] = ["-aE", "-E", "-vE", "--delete"]
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            loaded = load_config(config_path)
+            saved = json.loads(config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(["-a", "-v", "--delete"], loaded["rsync_options"])
+            self.assertEqual(["-a", "-v", "--delete"], saved["rsync_options"])
+
     def test_sources_table_labels_id_as_backup_subdirectory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = BackupState(Path(tmp) / "config.json")
@@ -47,6 +74,79 @@ class RsyncCommandTests(unittest.TestCase):
             self.assertIn('placeholder="backup-subdirectory"', html)
             self.assertNotIn("<th>Label</th>", html)
             self.assertIn("ID is the stable internal key", html)
+
+    def test_render_page_shows_only_one_previous_job_when_idle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = BackupState(Path(tmp) / "config.json")
+            state.jobs["oldest"] = job_for("oldest", "Oldest Job", 100)
+            state.jobs["middle"] = job_for("middle", "Middle Job", 200)
+            state.jobs["newest"] = job_for("newest", "Newest Job", 300)
+
+            html = render_page(state)
+
+            self.assertIn('data-job-id="newest"', html)
+            self.assertNotIn('data-job-id="middle"', html)
+            self.assertNotIn('data-job-id="oldest"', html)
+
+    def test_render_page_includes_backup_timeline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = BackupState(Path(tmp) / "config.json")
+            state.config["backup_disks"] = [
+                {
+                    "id": "offsite-a",
+                    "name": "Offsite Disk A",
+                    "mount_path": "/Volumes/Offsite-A",
+                    "destination_subdir": "Backups/This-Mac",
+                },
+                {
+                    "id": "offsite-b",
+                    "name": "Offsite Disk B",
+                    "mount_path": "/Volumes/Offsite-B",
+                    "destination_subdir": "Backups/This-Mac",
+                },
+            ]
+            state.jobs["a"] = job_for("a", "Offsite Disk A", 100, disk_id="offsite-a")
+            state.jobs["b"] = job_for("b", "Offsite Disk B", 200, disk_id="offsite-b")
+
+            html = render_page(state)
+
+            self.assertIn('id="backup-timeline"', html)
+            self.assertIn("Backup timeline", html)
+            self.assertIn("Offsite Disk A", html)
+            self.assertIn("Offsite Disk B", html)
+
+    def test_public_state_shows_running_job_and_one_previous_job(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = BackupState(Path(tmp) / "config.json")
+            state.jobs["old"] = job_for("old", "Old Job", 100)
+            state.jobs["previous"] = job_for("previous", "Previous Job", 200)
+            active = job_for("active", "Active Job", 300, status="running")
+            state.jobs["active"] = active
+            state.active_job_id = "active"
+
+            payload = public_state(state)
+
+            self.assertEqual(["Active Job", "Previous Job"], [job["disk_name"] for job in payload["jobs"]])
+
+    def test_public_state_timeline_uses_full_job_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = BackupState(Path(tmp) / "config.json")
+            state.config["backup_disks"] = [
+                {
+                    "id": "offsite-a",
+                    "name": "Offsite Disk A",
+                    "mount_path": "/Volumes/Offsite-A",
+                    "destination_subdir": "Backups/This-Mac",
+                }
+            ]
+            state.jobs["old"] = job_for("old", "Offsite Disk A", 100, disk_id="offsite-a")
+            state.jobs["middle"] = job_for("middle", "Offsite Disk A", 200, disk_id="offsite-a")
+            state.jobs["new"] = job_for("new", "Offsite Disk A", 300, disk_id="offsite-a")
+
+            payload = public_state(state)
+
+            self.assertEqual(1, len(payload["jobs"]))
+            self.assertEqual(3, len(payload["timeline"]["rows"][0]["events"]))
 
     def test_dry_run_does_not_create_destination_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -199,6 +299,17 @@ def config_for(source: Path) -> dict:
         ],
         "backup_disks": [],
     }
+
+
+def job_for(job_id: str, disk_name: str, started_at: float, status: str = "completed", disk_id: str | None = None) -> Job:
+    return Job(
+        id=job_id,
+        disk_id=disk_id or f"disk-{job_id}",
+        disk_name=disk_name,
+        dry_run=False,
+        started_at=started_at,
+        status=status,
+    )
 
 
 def disk_for(mount: Path) -> dict:

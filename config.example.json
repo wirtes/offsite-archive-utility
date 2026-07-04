@@ -1,7 +1,7 @@
 {
   "rsync_path": "/usr/bin/rsync",
   "rsync_options": [
-    "-aE",
+    "-a",
     "--delete",
     "--progress",
     "--human-readable"
