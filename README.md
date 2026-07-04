@@ -10,7 +10,7 @@ python3 app.py
 
 Open http://127.0.0.1:8585 on the backup Mac, or use `http://<mac-lan-ip>:8585` from another device on the same local network.
 
-The first run creates `config.json` next to `app.py`. You can edit it directly or use the Configuration section in the web UI. `config.json` is ignored by git because it contains machine-specific paths; use `config.example.json` as the shareable template.
+The first run creates `config.json` next to `app.py`. You can edit it directly or use the Configuration section in the web UI. The app also keeps `backup_history.json` next to the config so the Activity timeline persists across restarts. Both files are ignored by git because they contain machine-specific paths/history; use `config.example.json` as the shareable template.
 
 ## How It Backs Up
 

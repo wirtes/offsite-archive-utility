@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, urlparse
 
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = APP_DIR / "config.json"
+DEFAULT_HISTORY_PATH = APP_DIR / "backup_history.json"
 RSYNC_VERSION = "--version"
 BUILT_IN_EXCLUDE_PATTERNS = ("._*",)
 RSYNC_PROGRESS_RE = re.compile(
@@ -98,10 +99,12 @@ class Job:
 
 
 class BackupState:
-    def __init__(self, config_path: Path):
+    def __init__(self, config_path: Path, history_path: Path | None = None):
         self.config_path = config_path
+        self.history_path = history_path or config_path.with_name(DEFAULT_HISTORY_PATH.name)
         self.lock = threading.RLock()
         self.config = load_config(config_path)
+        self.history = load_history(self.history_path)
         self.jobs: dict[str, Job] = {}
         self.active_job_id: str | None = None
 
@@ -143,9 +146,45 @@ class BackupState:
         thread.start()
         return job
 
+    def record_job_history_locked(self, job: Job) -> None:
+        record = job_history_record(job)
+        self.history = [item for item in self.history if item.get("id") != job.id]
+        self.history.append(record)
+        self.history.sort(key=lambda item: float(item.get("started_at", 0)))
+        save_history(self.history_path, self.history)
+
 
 def timestamp(value: float | None = None) -> str:
     return datetime.fromtimestamp(value or time.time()).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def load_history(history_path: Path) -> list[dict[str, Any]]:
+    if not history_path.exists():
+        return []
+    with history_path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    if isinstance(data, dict):
+        data = data.get("jobs", [])
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict) and item.get("id") and item.get("disk_id")]
+
+
+def save_history(history_path: Path, history: list[dict[str, Any]]) -> None:
+    history_path.write_text(json.dumps({"jobs": history}, indent=2) + "\n", encoding="utf-8")
+
+
+def job_history_record(job: Job) -> dict[str, Any]:
+    return {
+        "id": job.id,
+        "disk_id": job.disk_id,
+        "disk_name": job.disk_name,
+        "dry_run": job.dry_run,
+        "started_at": job.started_at,
+        "ended_at": job.ended_at,
+        "status": job.status,
+        "returncode": job.returncode,
+    }
 
 
 def format_command(command: list[str]) -> str:
@@ -483,6 +522,7 @@ def run_job(state: BackupState, job_id: str) -> None:
             job.ended_at = time.time()
             job.log.append(f"[{timestamp()}] rsync exited with code {failed_returncode}")
             state.active_job_id = None
+            state.record_job_history_locked(job)
     except Exception as exc:  # noqa: BLE001 - user-facing local tool
         with state.lock:
             job = state.jobs[job_id]
@@ -491,6 +531,7 @@ def run_job(state: BackupState, job_id: str) -> None:
             job.ended_at = time.time()
             job.log.append(f"[{timestamp()}] Error: {exc}")
             state.active_job_id = None
+            state.record_job_history_locked(job)
 
 
 def parse_config_form(body: bytes) -> dict[str, Any]:
@@ -634,7 +675,7 @@ def public_state(state: BackupState) -> dict[str, Any]:
         config = state.config
         active_job = state.jobs.get(state.active_job_id) if state.active_job_id else None
         jobs = [job.to_dict() for job in visible_activity_jobs(state.jobs.values(), active_job)]
-        timeline = backup_timeline(state.jobs.values(), config["backup_disks"])
+        timeline = backup_timeline(timeline_history(state), config["backup_disks"])
     return {
         "sources": [source_status(source) for source in config["sources"]],
         "backup_disks": [disk_status(disk) for disk in config["backup_disks"]],
@@ -657,31 +698,39 @@ def visible_activity_jobs(jobs: Iterable[Job], active_job: Job | None) -> list[J
     return visible
 
 
-def backup_timeline(jobs: Iterable[Job], disks: list[dict[str, Any]]) -> dict[str, Any]:
-    all_jobs = sorted(jobs, key=lambda job: job.started_at)
-    if not all_jobs:
+def timeline_history(state: BackupState) -> list[dict[str, Any]]:
+    by_id = {str(item["id"]): dict(item) for item in state.history}
+    for job in state.jobs.values():
+        by_id[job.id] = job_history_record(job)
+    return sorted(by_id.values(), key=lambda item: float(item.get("started_at", 0)))
+
+
+def backup_timeline(history: Iterable[dict[str, Any]], disks: list[dict[str, Any]]) -> dict[str, Any]:
+    all_events = sorted(history, key=lambda item: float(item.get("started_at", 0)))
+    if not all_events:
         return {"rows": [], "start_label": "", "end_label": ""}
 
-    start = all_jobs[0].started_at
-    end = all_jobs[-1].started_at
+    start = float(all_events[0].get("started_at", 0))
+    end = float(all_events[-1].get("started_at", start))
     span = max(end - start, 1)
     disk_names = {disk["id"]: disk["name"] for disk in disks}
-    for job in all_jobs:
-        disk_names.setdefault(job.disk_id, job.disk_name)
+    for event in all_events:
+        disk_names.setdefault(str(event.get("disk_id", "")), str(event.get("disk_name", "Unknown disk")))
 
     rows = []
     for disk_id, disk_name in disk_names.items():
         events = []
-        for job in all_jobs:
-            if job.disk_id != disk_id:
+        for event in all_events:
+            if event.get("disk_id") != disk_id:
                 continue
+            started_at = float(event.get("started_at", 0))
             events.append(
                 {
-                    "id": job.id,
-                    "label": timestamp(job.started_at),
-                    "status": job.status,
-                    "dry_run": job.dry_run,
-                    "position": round(((job.started_at - start) / span) * 100, 2) if len(all_jobs) > 1 else 50,
+                    "id": event.get("id", ""),
+                    "label": timestamp(started_at),
+                    "status": event.get("status", "completed"),
+                    "dry_run": bool(event.get("dry_run", False)),
+                    "position": round(((started_at - start) / span) * 100, 2) if len(all_events) > 1 else 50,
                 }
             )
         rows.append({"disk_id": disk_id, "disk_name": disk_name, "events": events})
@@ -729,7 +778,7 @@ def render_page(state: BackupState, error: str = "") -> str:
         config = json.loads(json.dumps(state.config))
         active_job = state.jobs.get(state.active_job_id) if state.active_job_id else None
         jobs = visible_activity_jobs(state.jobs.values(), active_job)
-        timeline = backup_timeline(state.jobs.values(), config["backup_disks"])
+        timeline = backup_timeline(timeline_history(state), config["backup_disks"])
 
     sources = [source_status(source) for source in config["sources"]]
     disks = [disk_status(disk) for disk in config["backup_disks"]]

@@ -267,6 +267,30 @@ class RsyncCommandTests(unittest.TestCase):
             self.assertEqual(popen.call_args.kwargs["errors"], "replace")
             self.assertEqual(state.jobs[job.id].status, "completed")
             self.assertIn("bad byte", "\n".join(state.jobs[job.id].log))
+            history = json.loads((Path(tmp) / "backup_history.json").read_text(encoding="utf-8"))
+            self.assertEqual("job-one", history["jobs"][0]["id"])
+
+    def test_timeline_history_persists_across_state_instances(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            state = BackupState(config_path)
+            state.config["backup_disks"] = [
+                {
+                    "id": "offsite-a",
+                    "name": "Offsite Disk A",
+                    "mount_path": "/Volumes/Offsite-A",
+                    "destination_subdir": "Backups/This-Mac",
+                }
+            ]
+            job = job_for("historic", "Offsite Disk A", 100, disk_id="offsite-a")
+            job.ended_at = 120
+            state.record_job_history_locked(job)
+
+            restored_state = BackupState(config_path)
+            restored_state.config["backup_disks"] = state.config["backup_disks"]
+            payload = public_state(restored_state)
+
+            self.assertEqual("historic", payload["timeline"]["rows"][0]["events"][0]["id"])
 
     def test_rsync_progress_line_updates_job_progress(self) -> None:
         job = Job(
