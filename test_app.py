@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from app import BackupState, Job, SOURCE_FINDER_CONFIG_XATTRS, apply_source_finder_config, build_rsync_commands, default_config, get_finder_xattr, load_config, public_state, render_disk_card, render_job_card, render_page, run_job, set_finder_xattr, update_job_progress_from_line
+from app import BackupState, Job, build_rsync_commands, default_config, load_config, public_state, render_disk_card, render_job_card, render_page, run_job, update_job_progress_from_line
 
 
 class RsyncCommandTests(unittest.TestCase):
@@ -81,77 +81,6 @@ class RsyncCommandTests(unittest.TestCase):
         config = default_config()
 
         self.assertFalse(config["sources"][0]["delete"])
-
-    def test_applies_finder_config_to_source_paths(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            template = root / "example_icon_sync"
-            source = root / "source"
-            backup = root / "BackupDisk"
-            template.mkdir()
-            source.mkdir()
-            backup.mkdir()
-            set_finder_xattr(template, SOURCE_FINDER_CONFIG_XATTRS[0], b"\x00" * 8 + b"\x04\x0e" + b"\x00" * 22)
-            set_finder_xattr(template, SOURCE_FINDER_CONFIG_XATTRS[1], b'{"sym":"umbrella.fill"}')
-            set_finder_xattr(template, SOURCE_FINDER_CONFIG_XATTRS[2], b"Orange")
-            config = config_for(source)
-            config["backup_disks"] = [disk_for(backup)]
-
-            results = apply_source_finder_config(config, template)
-
-            self.assertEqual("updated", results[0]["status"])
-            for attr in SOURCE_FINDER_CONFIG_XATTRS:
-                self.assertEqual(get_finder_xattr(template, attr), get_finder_xattr(source, attr))
-                with self.assertRaises(OSError):
-                    get_finder_xattr(backup, attr)
-
-    def test_state_applies_finder_config_on_startup_and_save(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            template = root / "example_icon_sync"
-            source_one = root / "source-one"
-            source_two = root / "source-two"
-            template.mkdir()
-            source_one.mkdir()
-            source_two.mkdir()
-            set_finder_xattr(template, SOURCE_FINDER_CONFIG_XATTRS[1], b'{"sym":"umbrella.fill"}')
-            config_path = root / "config.json"
-            config = config_for(source_one)
-            config_path.write_text(json.dumps(config), encoding="utf-8")
-
-            state = BackupState(config_path, source_finder_config_path=template, auto_apply_source_finder_config=True)
-
-            self.assertEqual(get_finder_xattr(template, SOURCE_FINDER_CONFIG_XATTRS[1]), get_finder_xattr(source_one, SOURCE_FINDER_CONFIG_XATTRS[1]))
-
-            config["sources"][0]["path"] = str(source_two)
-            state.save_config(config)
-
-            self.assertEqual(get_finder_xattr(template, SOURCE_FINDER_CONFIG_XATTRS[1]), get_finder_xattr(source_two, SOURCE_FINDER_CONFIG_XATTRS[1]))
-
-    def test_missing_finder_config_template_returns_visible_failure(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "source"
-            source.mkdir()
-
-            results = apply_source_finder_config(config_for(source), Path(tmp) / "missing-template")
-
-            self.assertEqual(1, len(results))
-            self.assertIn("failed: source icon template", results[0]["status"])
-
-    def test_render_page_shows_source_finder_config_results(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            state = BackupState(Path(tmp) / "config.json")
-            state.source_finder_config_results = [
-                {"path": "/Volumes/SourceOne", "status": "updated"},
-                {"path": "/Volumes/SourceTwo", "status": "failed: Operation not permitted"},
-            ]
-
-            html = render_page(state)
-
-            self.assertIn("Source icons: last apply result", html)
-            self.assertIn("/Volumes/SourceOne", html)
-            self.assertIn("failed: Operation not permitted", html)
-            self.assertIn("Save and apply source icons", html)
 
     def test_render_page_shows_only_one_previous_job_when_idle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

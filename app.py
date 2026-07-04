@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import binascii
 import html
 import json
 import os
@@ -26,14 +25,8 @@ from urllib.parse import parse_qs, urlparse
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = APP_DIR / "config.json"
 DEFAULT_HISTORY_PATH = APP_DIR / "backup_history.json"
-DEFAULT_SOURCE_FINDER_CONFIG_PATH = APP_DIR / "example_icon_sync"
 RSYNC_VERSION = "--version"
 BUILT_IN_EXCLUDE_PATTERNS = ("._*",)
-SOURCE_FINDER_CONFIG_XATTRS = (
-    "com.apple.FinderInfo",
-    "com.apple.icon.folder#S",
-    "com.apple.metadata:_kMDItemUserTags",
-)
 RSYNC_PROGRESS_RE = re.compile(
     r"^\s*(?P<transferred>[\d.,]+[A-Za-z]*)\s+"
     r"(?P<percent>\d+)%\s+"
@@ -112,18 +105,11 @@ class BackupState:
         self,
         config_path: Path,
         history_path: Path | None = None,
-        source_finder_config_path: Path = DEFAULT_SOURCE_FINDER_CONFIG_PATH,
-        auto_apply_source_finder_config: bool | None = None,
     ):
         self.config_path = config_path
         self.history_path = history_path or config_path.with_name(DEFAULT_HISTORY_PATH.name)
-        self.source_finder_config_path = source_finder_config_path
-        self.auto_apply_source_finder_config = True if auto_apply_source_finder_config is None else auto_apply_source_finder_config
         self.lock = threading.RLock()
         self.config = load_config(config_path)
-        self.source_finder_config_results: list[dict[str, str]] = []
-        if self.auto_apply_source_finder_config:
-            self.source_finder_config_results = apply_source_finder_config(self.config, self.source_finder_config_path)
         self.history = load_history(self.history_path)
         self.jobs: dict[str, Job] = {}
         self.active_job_id: str | None = None
@@ -133,8 +119,6 @@ class BackupState:
         with self.lock:
             self.config = config
             self.config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-            if self.auto_apply_source_finder_config:
-                self.source_finder_config_results = apply_source_finder_config(self.config, self.source_finder_config_path)
 
     def start_job(self, disk_id: str, dry_run: bool) -> Job:
         with self.lock:
@@ -211,91 +195,6 @@ def job_history_record(job: Job) -> dict[str, Any]:
 
 def format_command(command: list[str]) -> str:
     return " ".join(shlex.quote(part) for part in command)
-
-
-def apply_source_finder_config(config: dict[str, Any], template_path: Path = DEFAULT_SOURCE_FINDER_CONFIG_PATH) -> list[dict[str, str]]:
-    template = read_source_finder_config(template_path)
-    if not template:
-        return [{"path": str(template_path), "status": "failed: source icon template not found or has no Finder metadata"}]
-
-    results = []
-    for source in config.get("sources", []):
-        source_path = Path(str(source.get("path", ""))).expanduser()
-        if not source_path.is_dir():
-            results.append({"path": str(source_path), "status": "skipped"})
-            continue
-        try:
-            changed = apply_finder_config_to_path(source_path, template)
-            results.append({"path": str(source_path), "status": "updated" if changed else "already-current"})
-        except OSError as exc:
-            results.append({"path": str(source_path), "status": f"failed: {friendly_finder_error(exc)}"})
-    return results
-
-
-def friendly_finder_error(exc: OSError) -> str:
-    message = str(exc)
-    if getattr(exc, "errno", None) == 1 or "Operation not permitted" in message:
-        return "permission denied by macOS. Give Terminal full disk access, then restart the launcher."
-    return message
-
-
-def read_source_finder_config(template_path: Path) -> dict[str, bytes]:
-    if not template_path.exists():
-        return {}
-
-    values: dict[str, bytes] = {}
-    for attr in SOURCE_FINDER_CONFIG_XATTRS:
-        try:
-            values[attr] = get_finder_xattr(template_path, attr)
-        except OSError:
-            continue
-    return values
-
-
-def apply_finder_config_to_path(path: Path, finder_config: dict[str, bytes]) -> bool:
-    changed = False
-    for attr, value in finder_config.items():
-        try:
-            current = get_finder_xattr(path, attr)
-        except OSError:
-            current = None
-        if current != value:
-            set_finder_xattr(path, attr, value)
-            changed = True
-    return changed
-
-
-def get_finder_xattr(path: Path, attr: str) -> bytes:
-    if hasattr(os, "getxattr"):
-        return os.getxattr(path, attr)  # type: ignore[attr-defined]
-
-    result = subprocess.run(
-        ["/usr/bin/xattr", "-px", attr, str(path)],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise OSError(result.stderr.strip() or f"Unable to read xattr {attr}")
-    hex_value = "".join(result.stdout.split())
-    return binascii.unhexlify(hex_value)
-
-
-def set_finder_xattr(path: Path, attr: str, value: bytes) -> None:
-    if hasattr(os, "setxattr"):
-        os.setxattr(path, attr, value)  # type: ignore[attr-defined]
-        return
-
-    result = subprocess.run(
-        ["/usr/bin/xattr", "-wx", attr, binascii.hexlify(value).decode("ascii"), str(path)],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise OSError(result.stderr.strip() or f"Unable to write xattr {attr}")
 
 
 def item_progress_percent(job: Job) -> int | None:
@@ -737,13 +636,6 @@ class BackupRequestHandler(BaseHTTPRequestHandler):
                 self.redirect("/?saved=1")
             except (ValueError, json.JSONDecodeError) as exc:
                 self.send_html(render_page(self.state, error=str(exc)), HTTPStatus.BAD_REQUEST)
-        elif parsed.path == "/apply-source-finder-config":
-            try:
-                config = parse_config_form(body)
-                self.state.save_config(config)
-                self.redirect("/?source-icons=1")
-            except (ValueError, json.JSONDecodeError) as exc:
-                self.send_html(render_page(self.state, error=str(exc)), HTTPStatus.BAD_REQUEST)
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -887,45 +779,12 @@ def render_backup_timeline(timeline: dict[str, Any]) -> str:
 </div>"""
 
 
-def render_source_finder_config_results(results: list[dict[str, str]]) -> str:
-    if not results:
-        return """<div class="finder-config-results">
-  <p>Source icons: not applied in this browser session yet.</p>
-  <span class="muted">They are applied when the app starts and whenever configuration is saved.</span>
-</div>"""
-
-    items = []
-    for result in results:
-        status = result.get("status", "")
-        if status in {"updated", "already-current"}:
-            status_class = "ok"
-        elif status.startswith("failed"):
-            status_class = "bad"
-        else:
-            status_class = "muted"
-        items.append(
-            f"""<li><span class="{status_class}">{escape(status)}</span><code>{escape(result.get("path", ""))}</code></li>"""
-        )
-
-    return f"""<div class="finder-config-results">
-  <p>Source icons: last apply result</p>
-  <ul>{''.join(items)}</ul>
-</div>"""
-
-
-def format_source_finder_config_results(results: list[dict[str, str]]) -> str:
-    if not results:
-        return "Source icon metadata was not applied."
-    return "; ".join(f"{result.get('status', 'unknown')} {result.get('path', '')}" for result in results)
-
-
 def render_page(state: BackupState, error: str = "") -> str:
     with state.lock:
         config = json.loads(json.dumps(state.config))
         active_job = state.jobs.get(state.active_job_id) if state.active_job_id else None
         jobs = visible_activity_jobs(state.jobs.values(), active_job)
         timeline = backup_timeline(timeline_history(state), config["backup_disks"])
-        source_finder_config_results = list(state.source_finder_config_results)
 
     sources = [source_status(source) for source in config["sources"]]
     disks = [disk_status(disk) for disk in config["backup_disks"]]
@@ -934,7 +793,6 @@ def render_page(state: BackupState, error: str = "") -> str:
     disk_cards = "\n".join(render_disk_card(disk, bool(active_job)) for disk in disks)
     job_cards = "\n".join(render_job_card(job) for job in jobs) or "<p class='muted'>No backup jobs yet.</p>"
     timeline_html = render_backup_timeline(timeline)
-    source_finder_config_html = render_source_finder_config_results(source_finder_config_results)
     active_job_id = active_job.id if active_job else ""
 
     return f"""<!doctype html>
@@ -1004,7 +862,6 @@ def render_page(state: BackupState, error: str = "") -> str:
             <h3>Sources</h3>
             <p>Read only. These locations are scanned and copied from; rsync will not write changes here.</p>
           </div>
-          {source_finder_config_html}
           <div class="table-wrap">
             <table id="sources-table">
               <thead><tr><th>Enabled</th><th>Delete</th><th>Subdirectory on backup disk</th><th>Path</th><th></th></tr></thead>
@@ -1012,7 +869,6 @@ def render_page(state: BackupState, error: str = "") -> str:
             </table>
           </div>
           <button type="button" class="secondary" data-add-row="source">Add source</button>
-          <button type="submit" class="secondary" formaction="/apply-source-finder-config" formmethod="post">Save and apply source icons</button>
         </div>
 
         <div class="config-zone disks-zone">
@@ -1273,21 +1129,6 @@ th { color: var(--muted); font-size: 13px; }
 .disks-zone { background: #fff1ef; border-color: #efb8b0; }
 .disks-zone .zone-heading p { color: #a5362b; }
 .config-zone .secondary { margin-top: 12px; }
-.finder-config-results {
-  background: rgba(255, 255, 255, 0.72); border: 1px solid rgba(23, 96, 58, 0.18);
-  border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;
-}
-.finder-config-results p { margin-bottom: 6px; font-size: 13px; font-weight: 750; }
-.finder-config-results ul { list-style: none; margin: 0; padding: 0; }
-.finder-config-results li {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 5px 0; border-top: 1px solid rgba(23, 96, 58, 0.10);
-}
-.finder-config-results li:first-child { border-top: 0; }
-.finder-config-results code {
-  display: inline; margin: 0; padding: 0; background: transparent;
-  overflow-wrap: anywhere; font-size: 12px;
-}
 .job { border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 12px; }
 .job-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .job-head span { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
@@ -1689,8 +1530,6 @@ def main() -> None:
     server = ThreadingHTTPServer((args.host, args.port), BackupRequestHandler)
     print(f"Offsite Archive Utility running at http://{args.host}:{args.port}")
     print(f"Config: {state.config_path}")
-    print(f"Source icon template: {state.source_finder_config_path}")
-    print(f"Source icon apply: {format_source_finder_config_results(state.source_finder_config_results)}")
     server.serve_forever()
 
 

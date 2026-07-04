@@ -14,8 +14,6 @@ For a double-click launcher, move `Offsite Archive Utility Launcher.app` to the 
 
 The first run creates `config.json` next to `app.py`. You can edit it directly or use the Configuration section in the web UI. The app also keeps `backup_history.json` next to the config so the Activity timeline persists across restarts. Both files are ignored by git because they contain machine-specific paths/history; use `config.example.json` as the shareable template.
 
-If `example_icon_sync` is present, the app copies its Finder metadata onto configured source folders at startup and whenever configuration is saved. This marks only source folders; backup destination folders and backup disks are not changed. For protected locations such as `~/Documents`, macOS may block this until Terminal has Full Disk Access in System Settings.
-
 ## How It Backs Up
 
 Each enabled source is synchronized into its own destination folder:
