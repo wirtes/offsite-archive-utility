@@ -263,6 +263,13 @@ class RsyncCommandTests(unittest.TestCase):
         self.assertIn('class="command-line active"', html)
         self.assertIn("/source-two/", html)
 
+    def test_command_lines_soft_wrap(self) -> None:
+        from app import CSS
+
+        self.assertIn(".command-line {", CSS)
+        self.assertIn("white-space: pre-wrap", CSS)
+        self.assertIn("overflow-wrap: anywhere", CSS)
+
     def test_job_log_replaces_undecodable_rsync_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.json"

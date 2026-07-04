@@ -1164,7 +1164,12 @@ th { color: var(--muted); font-size: 13px; }
 .command-line,
 code {
   display: block; background: #f3f6f8; border-radius: 6px; padding: 9px 10px;
-  margin-bottom: 6px; overflow-x: auto; white-space: pre;
+  margin-bottom: 6px;
+}
+.command-line {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .command-line.active {
   background: #fff2a8;
